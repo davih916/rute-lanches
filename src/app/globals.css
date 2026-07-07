@@ -1,0 +1,90 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fafafa;
+  --foreground: #171717;
+
+  /* Marca da loja — sobrescrito em runtime pelo layout a partir de Settings,
+     para que o mesmo código sirva qualquer lanchonete (SaaS replicável). */
+  --brand-primary: #ea1d2c;
+  --brand-secondary: #ffc72c;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-brand-primary: var(--brand-primary);
+  --color-brand-secondary: var(--brand-secondary);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-slide-up {
+  animation: slide-up 0.25s ease-out;
+}
+
+@keyframes pulse-border {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+  }
+}
+
+.animate-pulse-border {
+  animation: pulse-border 1.4s ease-in-out infinite;
+}
+
+/* Impressão de comanda (impressoras térmicas 58mm/80mm).
+   O tamanho exato de @page é definido inline pela página da comanda,
+   pois depende da configuração da loja (Settings.receiptWidth). */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .comanda-print-area,
+  .comanda-print-area * {
+    visibility: visible;
+  }
+  .comanda-print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+  .no-print {
+    display: none !important;
+  }
+}
+

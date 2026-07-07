@@ -1,0 +1,291 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Valores monetários são sempre armazenados em CENTAVOS (Int) para evitar
+// problemas de arredondamento com ponto flutuante.
+//
+// Campos de "status" são String (não enum nativo) para manter portabilidade
+// entre SQLite (dev) e Postgres/MySQL (produção). Os valores válidos são
+// centralizados em `src/lib/constants.ts` e validados via Zod nas fronteiras
+// da aplicação (API routes).
+// ---------------------------------------------------------------------------
+
+model Admin {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         String   @default("owner") // "owner" | "staff"
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  statusChanges OrderStatusHistory[]
+
+  @@map("admins")
+}
+
+model Category {
+  id        String    @id @default(cuid())
+  name      String
+  slug      String    @unique
+  order     Int       @default(0)
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  categoryId  String
+  category    Category @relation(fields: [categoryId], references: [id])
+  name        String
+  slug        String   @unique
+  description String
+  ingredients String
+  priceCents  Int
+  imageUrl    String?
+  active      Boolean  @default(true)
+  order       Int      @default(0)
+
+  // Dados fiscais — obrigatórios para emitir NFC-e deste produto.
+  ncm               String? // Nomenclatura Comum do Mercosul (8 dígitos)
+  cfop              String? // Código Fiscal de Operações (ex: 5102)
+  csosnCst          String? // CSOSN (Simples Nacional) ou CST (regime normal)
+  unidadeComercial  String  @default("UN")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  addons     ProductAddon[]
+  orderItems OrderItem[]
+
+  @@index([categoryId])
+  @@map("products")
+}
+
+model ProductAddon {
+  id         String  @id @default(cuid())
+  productId  String
+  product    Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  name       String
+  priceCents Int
+  active     Boolean @default(true)
+
+  orderItemAddons OrderItemAddon[]
+
+  @@index([productId])
+  @@map("product_addons")
+}
+
+model Customer {
+  id            String   @id @default(cuid())
+  name          String
+  phone         String   @unique
+  address       String? // opcional: pedidos de retirada não precisam de endereço
+  addressNumber String?
+  neighborhood  String?
+  complement    String?
+  reference     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orders Order[]
+
+  @@map("customers")
+}
+
+// Bairro atendido pela entrega, com taxa própria. `active=false` remove o bairro do
+// checkout sem apagar o histórico de pedidos que já o usaram (mesmo padrão de
+// Category/Product — exclusão só é permitida se nenhum pedido referenciar o bairro).
+model DeliveryZone {
+  id           String   @id @default(cuid())
+  neighborhood String   @unique
+  feeCents     Int
+  active       Boolean  @default(true)
+  order        Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  orders Order[]
+
+  @@map("delivery_zones")
+}
+
+model Order {
+  id               String    @id @default(cuid())
+  orderNumber      Int       @unique
+  customerId       String
+  customer         Customer  @relation(fields: [customerId], references: [id])
+  status           String    @default("recebido")
+  // "recebido" (novo pedido) | "preparando" | "saiu_entrega" | "entregue" | "cancelado"
+  deliveryType     String    @default("entrega")
+  // "entrega" | "retirada"
+  paymentMethod    String
+  // "pix" | "dinheiro" | "cartao_credito" | "cartao_debito"
+  cashChangeForCents Int? // troco: valor com que o cliente vai pagar (só quando paymentMethod = "dinheiro")
+  itemsTotalCents  Int
+  deliveryZoneId   String? // bairro escolhido (só entrega) — taxa em deliveryFeeCents já é o snapshot
+  deliveryZone     DeliveryZone? @relation(fields: [deliveryZoneId], references: [id], onDelete: Restrict)
+  deliveryFeeCents Int       @default(0)
+  totalCents       Int
+  notes            String?
+  printedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  items         OrderItem[]
+  statusHistory OrderStatusHistory[]
+  fiscal        Fiscal?
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String  @id @default(cuid())
+  orderId        String
+  order          Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId      String
+  product        Product @relation(fields: [productId], references: [id])
+  productName    String // snapshot do nome no momento da compra
+  quantity       Int
+  unitPriceCents Int    // snapshot do preço no momento da compra
+  notes          String?
+
+  addons OrderItemAddon[]
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model OrderItemAddon {
+  id          String        @id @default(cuid())
+  orderItemId String
+  orderItem   OrderItem     @relation(fields: [orderItemId], references: [id], onDelete: Cascade)
+  addonId     String?
+  addon       ProductAddon? @relation(fields: [addonId], references: [id])
+  name        String // snapshot
+  priceCents  Int    // snapshot
+
+  @@index([orderItemId])
+  @@map("order_item_addons")
+}
+
+model OrderStatusHistory {
+  id          String   @id @default(cuid())
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status      String
+  changedAt   DateTime @default(now())
+  changedById String?
+  changedBy   Admin?   @relation(fields: [changedById], references: [id])
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+// Linha única (id fixo "default") com as configurações da loja.
+// Mantém o sistema replicável: tudo que muda entre clientes fica aqui,
+// nunca hardcoded no código.
+model Settings {
+  id               String   @id @default("default")
+  storeName        String   @default("Rute Lanches")
+  logoUrl          String?
+  primaryColor     String   @default("#F97316")
+  secondaryColor   String   @default("#16A34A")
+  whatsapp         String?
+  address          String?
+  storeOpen        Boolean  @default(true)
+  openingHours     String   @default("{}") // JSON serializado por dia da semana
+  acceptedPaymentMethods String @default("[\"pix\",\"dinheiro\",\"cartao_credito\",\"cartao_debito\"]") // JSON array de PaymentMethod
+  deliveryFeeCents Int      @default(0)
+  minOrderCents    Int      @default(0)
+  receiptWidth     String   @default("80mm") // "58mm" | "80mm"
+  lastOrderNumber  Int      @default(0)
+  updatedAt        DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// Nota fiscal (NFC-e) de cada pedido. A linha é criada junto com o pedido,
+// sempre como "aguardando_emissao" — a emissão real só acontece quando o
+// admin aciona "Emitir NFC-e" (ver src/lib/services/fiscal-service.ts).
+model Fiscal {
+  id               String    @id @default(cuid())
+  orderId          String    @unique
+  order            Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  customerDocument String? // CPF/CNPJ opcional
+  status           String    @default("aguardando_emissao")
+  // "aguardando_emissao" | "emitida" | "erro"
+  provider         String? // "pending" | "nuvem_fiscal" | "focus_nfe" | "plug_notas"
+  ambiente         String? // "homologacao" | "producao" — em qual ambiente foi emitida
+  externalId       String? // id do documento no provider (para consultas futuras)
+  numero           Int? // número da NFC-e
+  serie            Int? // série da NFC-e
+  chaveAcesso      String? // chave de acesso de 44 dígitos
+  pdfUrl           String? // DANFCE
+  xmlUrl           String?
+  xmlContent       String? // XML completo, guardado aqui para não depender do provider indefinidamente
+  errorMessage     String?
+  issuedAt         DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@map("fiscal")
+}
+
+// Configuração fiscal da loja (singleton, id fixo "default"). Guarda os
+// dados necessários para emitir NFC-e: cadastro da empresa, certificado
+// digital A1 e credenciais da API do provider fiscal.
+model FiscalConfig {
+  id       String @id @default("default")
+  provider String @default("pending") // "pending" | "nuvem_fiscal"
+  ambiente String @default("homologacao") // "homologacao" | "producao"
+
+  // Credenciais da API do provider fiscal (ex: Nuvem Fiscal client_id/secret).
+  // clientSecret nunca é armazenado em texto puro — ver src/lib/crypto.ts.
+  clientId              String?
+  clientSecretEncrypted String?
+
+  // Dados cadastrais da empresa emitente.
+  cnpj               String?
+  razaoSocial        String?
+  nomeFantasia       String?
+  inscricaoEstadual  String?
+  inscricaoMunicipal String?
+  regimeTributario   String? // "simples_nacional" | "normal" | "mei"
+  email              String?
+  telefone           String?
+
+  // Endereço da empresa (exigido pela SEFAZ no cadastro do emitente).
+  logradouro     String?
+  numero         String?
+  complemento    String?
+  bairro         String?
+  municipioCodigo String? // código IBGE do município
+  municipioNome  String?
+  uf             String?
+  cep            String?
+
+  // Status do certificado A1. O arquivo/senha em si NUNCA é persistido aqui —
+  // é enviado direto para o provider no momento do upload e descartado.
+  empresaRegistradaEm  DateTime?
+  certificadoEnviadoEm DateTime?
+  certificadoValidoAte DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  @@map("fiscal_config")
+}
