@@ -31,37 +31,51 @@ export async function POST(request: Request) {
     );
   }
 
-  // Login simplificado: só senha. Autentica contra o primeiro admin ativo
-  // (hoje o sistema tem um único administrador).
-  const admin = await prisma.admin.findFirst({
-    where: { active: true },
-    orderBy: { createdAt: "asc" },
-  });
+  try {
+    // Login simplificado: só senha. Autentica contra o primeiro admin ativo
+    // (hoje o sistema tem um único administrador).
+    const admin = await prisma.admin.findFirst({
+      where: { active: true },
+      orderBy: { createdAt: "asc" },
+    });
 
-  if (!admin) {
-    registerFailedLoginAttempt(rateLimitKey);
-    return NextResponse.json({ error: "Senha inválida." }, { status: 401 });
+    if (!admin) {
+      registerFailedLoginAttempt(rateLimitKey);
+      return NextResponse.json({ error: "Senha inválida." }, { status: 401 });
+    }
+
+    const validPassword = await verifyPassword(password, admin.passwordHash);
+    if (!validPassword) {
+      registerFailedLoginAttempt(rateLimitKey);
+      return NextResponse.json({ error: "Senha inválida." }, { status: 401 });
+    }
+
+    clearLoginAttempts(rateLimitKey);
+
+    const token = await createSessionToken({
+      sub: admin.id,
+      email: admin.email,
+      name: admin.name,
+      role: admin.role,
+    });
+
+    await setSessionCookie(token);
+
+    return NextResponse.json({
+      ok: true,
+      admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role },
+    });
+  } catch (error) {
+    // Erro inesperado (ex: JWT_SECRET ausente/curta demais, banco fora do ar) — sempre
+    // devolve JSON em vez de deixar a rota quebrar sem corpo (o client interpretaria
+    // isso como "falha de conexão" ao tentar fazer res.json() numa resposta não-JSON).
+    console.error(
+      "[POST /api/auth/login] Erro inesperado — verifique JWT_SECRET e DATABASE_URL.",
+      error
+    );
+    return NextResponse.json(
+      { error: "Erro ao processar login. Tente novamente em instantes." },
+      { status: 500 }
+    );
   }
-
-  const validPassword = await verifyPassword(password, admin.passwordHash);
-  if (!validPassword) {
-    registerFailedLoginAttempt(rateLimitKey);
-    return NextResponse.json({ error: "Senha inválida." }, { status: 401 });
-  }
-
-  clearLoginAttempts(rateLimitKey);
-
-  const token = await createSessionToken({
-    sub: admin.id,
-    email: admin.email,
-    name: admin.name,
-    role: admin.role,
-  });
-
-  await setSessionCookie(token);
-
-  return NextResponse.json({
-    ok: true,
-    admin: { id: admin.id, name: admin.name, email: admin.email, role: admin.role },
-  });
 }

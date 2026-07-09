@@ -728,3 +728,45 @@ diferentes por ambiente). Depois de configurar, redeploy — o `prisma migrate d
 estiver vazio depois disso (cardápio não aparece), rode `npm run prisma:seed` **uma vez**
 localmente apontando `DATABASE_URL` pro banco de produção (ou rode via `vercel env pull` +
 `npx tsx prisma/seed.ts` localmente).
+
+### Seed rodado em produção (2026-07-09)
+
+Rodado manualmente contra o Neon de produção (`DATABASE_URL` passada inline, nunca
+commitada): **7 categorias, 106 produtos**, settings padrão da loja e admin criado com
+`admin@rutelanches.com.br` / senha `12345` (o cliente não tinha passado
+`SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` customizados nesse run — **trocar a senha pelo
+painel assim que possível**, ver §6).
+
+### Bug encontrado logo depois: login com "Falha de conexão"
+
+**Sintoma**: depois do site subir e o cardápio aparecer, o login do admin (`/admin/login`)
+falhava com "Falha de conexão" — mensagem do catch genérico em `login-form.tsx`, que só
+aparece quando o `fetch()` não consegue interpretar a resposta como JSON.
+
+**Causa raiz**: `POST /api/auth/login` (`src/app/api/auth/login/route.ts`) não tinha
+try/catch — se `JWT_SECRET` estiver ausente ou tiver menos de 16 caracteres na Vercel,
+`createSessionToken()` lança (`getJwtSecret()` em `auth.ts`), a rota quebra sem devolver
+corpo JSON, e o client interpreta isso como falha de rede em vez de erro de servidor.
+**Confirmado localmente**: rodando o dev server contra o Postgres de produção, login
+funcionou normalmente com `JWT_SECRET` válido (200, retornou os dados do admin); com
+`JWT_SECRET` propositalmente curto, reproduziu exatamente o sintoma antes da correção.
+
+**Correção**: `POST /api/auth/login` agora embrulha toda a lógica (consulta ao admin,
+verificação de senha, criação do token) num try/catch — qualquer erro inesperado devolve
+`{ error: "Erro ao processar login. Tente novamente em instantes." }` com status 500 (JSON
+válido, o client mostra a mensagem certa) e loga o erro original completo com
+`console.error` (aparece nos **Vercel Function Logs**, apontando exatamente qual variável
+checar).
+
+**Ação pendente do lado do cliente**: confirmar que `JWT_SECRET` está cadastrada na Vercel
+(Project Settings → Environment Variables, para **Production**) com uma string aleatória
+≥32 caracteres — é bem provável que essa variável não tenha sido cadastrada ainda (só
+`DATABASE_URL` foi confirmada até aqui).
+
+### Gotcha adicional: disco cheio na máquina de desenvolvimento
+
+Durante esse diagnóstico, o disco C: da máquina local chegou a **0 bytes livres**, o que
+impedia até `Edit`/`npm install` (`ENOSPC`). Não é um problema do projeto — mas se
+reaparecer, procure instaladores/ISOs grandes soltos em Downloads (`.exe`, `.iso`,
+`.msi`) que já cumpriram a função de instalar algo; são os maiores candidatos a apagar
+com segurança antes de mexer no projeto de novo.
