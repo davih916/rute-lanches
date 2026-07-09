@@ -1,11 +1,11 @@
 import { SiteHeader } from "@/components/site/site-header";
 import { SiteFooter } from "@/components/site/site-footer";
 import { CartDrawer } from "@/components/site/cart-drawer";
-import { getSettings } from "@/lib/services/settings-service";
+import { getSettingsSafe } from "@/lib/services/settings-service";
 import { isStoreOpenNow } from "@/lib/opening-hours";
 
 export default async function SiteLayout({ children }: { children: React.ReactNode }) {
-  const settings = await getSettings();
+  const settings = await getSettingsSafe();
   const storeOpen = isStoreOpenNow(settings);
 
   return (

@@ -1,11 +1,12 @@
 # Rute Lanches — Documentação de handoff
 
 > Documento de referência para continuar o desenvolvimento em outra conversa/sessão.
-> Reflete o estado do projeto em **2026-07-07** (última atualização: CRUD de produtos e
-> categorias + upload de foto de produto + troca de senha do admin + controle operacional
-> da loja — horário de funcionamento + formas de pagamento aceitas + taxa de entrega por
-> bairro — item "Ajustes de uso real" do roadmap completo). Sempre confira o
-> código-fonte antes de assumir que algo aqui ainda é verdade — este arquivo pode ficar
+> Reflete o estado do projeto em **2026-07-09** (última atualização: correção do deploy em
+> produção na Vercel — troca de SQLite para PostgreSQL, migrations regeradas, error
+> boundaries e fallbacks seguros nas páginas públicas — ver §15. Antes disso: CRUD de
+> produtos e categorias + upload de foto de produto + troca de senha do admin + controle
+> operacional da loja — horário de funcionamento + formas de pagamento aceitas + taxa de
+> entrega por bairro). Sempre confira o código-fonte antes de assumir que algo aqui ainda é verdade — este arquivo pode ficar
 > desatualizado.
 
 ---
@@ -44,7 +45,7 @@ Admin pode emitir NFC-e manualmente no pedido entregue (Nuvem Fiscal)
 | Linguagem | TypeScript | ^5 |
 | UI | React | 19.2.4 |
 | Estilo | Tailwind CSS (CSS-first, `@theme`) | ^4 |
-| Banco / ORM | SQLite (dev) via Prisma | Prisma ^6.19.3 |
+| Banco / ORM | PostgreSQL via Prisma (trocado de SQLite em 2026-07-09, ver §4) | Prisma ^6.19.3 |
 | Estado do carrinho | Zustand (persistido em localStorage) | ^5 |
 | Data fetching do painel | TanStack Query (polling 5s) | ^5 |
 | Auth | Cookie JWT httpOnly (`jose`) + bcrypt (`bcryptjs`) | jose ^6, bcryptjs ^3 |
@@ -52,10 +53,18 @@ Admin pode emitir NFC-e manualmente no pedido entregue (Nuvem Fiscal)
 | Fiscal | Adapter próprio para Nuvem Fiscal (REST + OAuth2) | — |
 
 **Por que essas escolhas / desvios do "padrão":**
-- **SQLite em vez de Postgres**: simplicidade para MVP de single-tenant; troca-se só
-  `provider` + `DATABASE_URL` em `schema.prisma` quando for para produção multi-usuário
-  concorrente. Preços em **centavos (Int)** desde o início — não existe `Decimal` no
-  connector SQLite do Prisma, e evita bugs de ponto flutuante de qualquer forma.
+- **PostgreSQL** (era SQLite até 2026-07-09): o deploy na Vercel quebrava com "A server
+  error occurred" em qualquer página — causa raiz era `DATABASE_URL="file:./dev.db"`, que
+  não funciona em runtime serverless (sistema de arquivos read-only/efêmero, sem
+  persistência entre invocações). Nenhum código de aplicação dependia de SQLite
+  especificamente (nada de `$queryRaw`/`PRAGMA`), então a troca de `provider` no
+  `schema.prisma` foi limpa. **As 6 migrations antigas (sintaxe SQLite) foram substituídas
+  por uma única migration nova (`20260707160000_init_postgresql`)** gerada via `prisma
+  migrate diff --from-empty --to-schema-datamodel` — histórico de migrations reiniciado de
+  propósito porque o banco de produção nunca tinha sido usado (nenhum dado a preservar).
+  Preços continuam em **centavos (Int)** — não é mais uma limitação do driver (Postgres tem
+  `Decimal`), mas evita bugs de ponto flutuante de qualquer forma, e trocar exigiria migrar
+  todos os valores já gravados.
 - **Status como `String`, não enum nativo do banco**: portabilidade entre SQLite/Postgres/
   MySQL. Os valores válidos vivem em `src/lib/constants.ts` (`as const` + `Record<...>`) e
   são validados via Zod nas API routes — nunca confie só no tipo do Prisma.
@@ -176,18 +185,17 @@ src/
 
 ## 4. Banco de dados
 
-SQLite em dev (`prisma/dev.db`), trocável para Postgres/MySQL mudando só `datasource` em
-`schema.prisma` (nenhum código de aplicação depende de SQLite especificamente).
+**PostgreSQL** (trocado de SQLite em 2026-07-09 — ver §2 e §15 para o motivo e o diagnóstico
+completo do incidente de deploy). Continua trocável para MySQL mudando só `datasource` em
+`schema.prisma` (nenhum código de aplicação depende do provider especificamente — sem
+`$queryRaw`/`$executeRaw`).
 
 ### Migrations aplicadas (em ordem)
-1. `init` — schema inicial completo (todas as tabelas base)
-2. `update_default_brand_colors` — trocou defaults de cor (laranja/verde em vez de vermelho/amarelo)
-3. `delivery_type_and_cash_change` — `Order.deliveryType`, `Order.cashChangeForCents`, `Customer.address` virou opcional
-4. `fiscal_nfce_integration` — `FiscalConfig` (nova), campos fiscais em `Product`, `Fiscal` ampliado
-5. `accepted_payment_methods` — `Settings.acceptedPaymentMethods` (JSON array, default com as
-   4 formas — ver §8)
-6. `delivery_zones` — `DeliveryZone` (nova), `Order.deliveryZoneId` (FK opcional, `RESTRICT`
-   — ver §8)
+1. `20260707160000_init_postgresql` — schema completo atual (todas as tabelas), gerado do
+   zero para Postgres. **Substitui as 6 migrations antigas em sintaxe SQLite** (`init`,
+   `update_default_brand_colors`, `delivery_type_and_cash_change`,
+   `fiscal_nfce_integration`, `accepted_payment_methods`, `delivery_zones`) — histórico
+   reiniciado de propósito (ver §2), o schema final é o mesmo de antes da troca de banco.
 
 ### Models e relações
 
@@ -278,13 +286,16 @@ Arquivo `.env` (não commitado; `.env.example` tem os placeholders):
 
 | Variável | Obrigatória | Descrição |
 |---|---|---|
-| `DATABASE_URL` | sim | `file:./dev.db` em dev |
+| `DATABASE_URL` | sim | URL de conexão **PostgreSQL** (`postgresql://usuario:senha@host:5432/banco?sslmode=require`) — precisa estar configurada tanto localmente (`.env`) quanto na Vercel (Project Settings → Environment Variables), **para todos os ambientes** (Production/Preview/Development) |
 | `JWT_SECRET` | sim | assina o cookie de sessão do admin — string aleatória ≥32 chars |
 | `FISCAL_ENCRYPTION_KEY` | sim (se for usar fiscal) | criptografa `client_secret` da API fiscal no banco |
 | `SEED_ADMIN_EMAIL` | não | default `admin@rutelanches.com.br` (usado só internamente, não aparece no login) |
 | `SEED_ADMIN_PASSWORD` | não | default **`12345`** — **senha de teste, trocar antes de produção** |
 
 Gerar segredos: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+
+**Este projeto não usa NextAuth** (autenticação é JWT próprio via `jose`, ver §6) — não
+existem nem são necessárias `NEXTAUTH_SECRET`/`NEXTAUTH_URL`.
 
 ---
 
@@ -598,6 +609,10 @@ Conteúdo atual (todos os preços conferidos contra os encartes reais do cliente
   `location.reload()` antes de repetir a ação geralmente resolve. Isso é uma flakiness da
   ferramenta de preview usada durante o desenvolvimento, não um bug da aplicação (sempre
   confirmado via chamada direta a `fetch()` que o endpoint funciona).
+- **`npm run build` local pode estourar memória** na etapa de type-check duplicado do
+  Next (`Running TypeScript...`), especialmente com pouca RAM livre na máquina — não
+  indica erro de código (rodar `npx tsc --noEmit` separado é a forma confiável de validar
+  tipos localmente). A Vercel roda o build com bem mais memória disponível.
 
 ## 13. Próximos passos sugeridos
 
@@ -627,10 +642,13 @@ dia; deixa o fiscal por último até validar com o contador):
 
 ## 14. Como rodar
 
+Precisa de um banco **PostgreSQL** primeiro (local via Docker, ou um serviço na nuvem —
+Vercel Postgres, Neon, Supabase — todos têm free tier e dão a `DATABASE_URL` pronta):
+
 ```bash
 npm install
-cp .env.example .env        # preencher JWT_SECRET e FISCAL_ENCRYPTION_KEY
-npm run prisma:migrate       # cria o banco SQLite e aplica as migrations
+cp .env.example .env        # preencher DATABASE_URL (postgres), JWT_SECRET, FISCAL_ENCRYPTION_KEY
+npm run prisma:migrate       # aplica as migrations no Postgres (cria as tabelas)
 npm run prisma:seed          # cardápio real + admin (senha 12345) + settings
 npm run dev
 ```
@@ -638,6 +656,75 @@ npm run dev
 Site: `http://localhost:3000` · Admin: `http://localhost:3000/admin/login` (senha `12345`,
 ou o valor de `SEED_ADMIN_PASSWORD` no `.env`).
 
-Comandos úteis: `npm run build` (build de produção), `npm run lint`, `npm run
-prisma:studio` (editor visual do banco), `npm run prisma:migrate` (nova migration a
-partir de mudanças no `schema.prisma`).
+Comandos úteis: `npm run build` (roda `prisma generate && prisma migrate deploy && next
+build` — ver §15), `npm run lint`, `npm run prisma:studio` (editor visual do banco), `npm
+run prisma:migrate` (nova migration a partir de mudanças no `schema.prisma`).
+
+---
+
+## 15. Deploy na Vercel — incidente de 2026-07-09 e correção
+
+**Sintoma**: build passava na Vercel, mas qualquer página (inclusive a home) mostrava a
+tela genérica "This page couldn't load / A server error occurred" com um código de erro.
+
+**Causa raiz**: `DATABASE_URL` apontava para SQLite (`file:./dev.db`, um arquivo local).
+Funções serverless da Vercel rodam num sistema de arquivos somente-leitura/efêmero — não
+existe onde o SQLite gravar/ler o arquivo do banco em produção. Toda página pública já
+passa por `prisma` logo de cara (`RootLayout` e `(site)/layout.tsx` chamam
+`getSettings()`), então a request inteira quebrava antes de renderizar qualquer HTML.
+
+**O que foi corrigido** (só infraestrutura/robustez — nenhuma mudança de UI, design ou
+funcionalidade):
+1. **`schema.prisma`**: `provider` trocado de `sqlite` para `postgresql` (ver §4 para o
+   detalhe das migrations).
+2. **`package.json`**: `"build"` agora roda `prisma generate && prisma migrate deploy &&
+   next build` (aplica migrations pendentes a cada deploy) e `"postinstall": "prisma
+   generate"` (garante que o client sempre é gerado, mesmo se o passo de build mudar).
+3. **Fallback seguro em vez de 500** nas páginas públicas mais acessadas:
+   - `getSettingsSafe()` (`settings-service.ts`) — se o banco estiver inacessível, retorna
+     configurações padrão com `storeOpen: false` (mais seguro que fingir que está aberto)
+     em vez de lançar. Usada em `RootLayout`, `(site)/layout.tsx` e `checkout/page.tsx`.
+   - `(site)/page.tsx` — busca de categorias/produtos embrulhada em try/catch; se falhar,
+     cai para lista vazia, que o `MenuBrowser` já trata com "Cardápio em atualização" (não
+     precisou de UI nova).
+   - `checkout/page.tsx` — bairros de entrega com o mesmo tratamento (lista vazia = só
+     retirada, comportamento que já existia para "nenhum bairro cadastrado").
+   - Todos os fallbacks logam com `console.error` e uma mensagem específica apontando pra
+     `DATABASE_URL`/migrations — aparece nos **Vercel Function Logs** pra debug rápido.
+4. **`src/app/error.tsx` e `src/app/global-error.tsx`** (novos — não existiam nenhum
+   error boundary antes): qualquer erro não tratado que sobrar (ex: `JWT_SECRET` ausente
+   derrubando uma página admin) agora cai numa tela própria da aplicação ("Algo deu
+   errado" + botão "Tentar novamente" + código de referência), nunca mais na tela genérica
+   da Vercel. `global-error.tsx` usa estilo inline (não Tailwind) de propósito — ele
+   substitui o `<html>/<body>` inteiro e não pode depender do CSS ter carregado.
+
+**Migrations**: as 6 migrations antigas (sintaxe SQLite) foram apagadas e substituídas por
+uma única `20260707160000_init_postgresql/migration.sql`, gerada offline com `npx prisma
+migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` (não
+precisa de um Postgres real rodando pra gerar o SQL, só precisa de uma `DATABASE_URL` com
+formato válido). Decisão discutida e confirmada com o cliente antes de apagar — segura
+porque o banco de produção nunca tinha rodado nenhuma migration.
+
+**O que NÃO foi possível testar neste ambiente** (sem Postgres disponível localmente):
+`prisma migrate deploy` contra um banco real, e o `next build` completo (a etapa de
+type-check duplicada do Next.js estourou a memória da máquina local — ambiente já estava
+com pouca RAM livre; **não é um erro de código** — `tsc --noEmit` e `eslint` passaram
+100% limpos, e o Next chegou a confirmar "Compiled successfully" antes de travar nessa
+etapa redundante. A Vercel tem bem mais memória de build e não deve ter esse problema.
+
+### Variáveis a cadastrar no painel da Vercel (Project Settings → Environment Variables)
+
+| Variável | Valor |
+|---|---|
+| `DATABASE_URL` | connection string do Postgres (Vercel Postgres/Neon/Supabase — inclua `?sslmode=require`) |
+| `JWT_SECRET` | string aleatória ≥32 chars (gerar com o comando do §5) |
+| `FISCAL_ENCRYPTION_KEY` | string aleatória ≥32 chars (só necessária se for usar o módulo fiscal) |
+| `SEED_ADMIN_EMAIL` | opcional — só usado ao rodar o seed |
+| `SEED_ADMIN_PASSWORD` | opcional — só usado ao rodar o seed; troque a senha pelo painel depois (ver §6) |
+
+Marque todas para **Production**, **Preview** e **Development** (a menos que use bancos
+diferentes por ambiente). Depois de configurar, redeploy — o `prisma migrate deploy` do
+`build` script cria as tabelas automaticamente no primeiro deploy. Se o banco ainda
+estiver vazio depois disso (cardápio não aparece), rode `npm run prisma:seed` **uma vez**
+localmente apontando `DATABASE_URL` pro banco de produção (ou rode via `vercel env pull` +
+`npx tsx prisma/seed.ts` localmente).

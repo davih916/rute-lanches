@@ -2,20 +2,38 @@ import { prisma } from "@/lib/prisma";
 import { MenuBrowser } from "@/components/site/menu-browser";
 import type { CategoryView } from "@/lib/types";
 
-export default async function HomePage() {
-  const categories = await prisma.category.findMany({
-    where: { active: true },
-    orderBy: { order: "asc" },
-    include: {
-      products: {
-        where: { active: true },
-        orderBy: { order: "asc" },
-        include: {
-          addons: { where: { active: true } },
+/**
+ * Se o banco estiver inacessível (DATABASE_URL ausente/errada, migrations
+ * não aplicadas), cai para cardápio vazio em vez de derrubar a página com
+ * erro 500 — o MenuBrowser já trata lista vazia com a mensagem "Cardápio em
+ * atualização".
+ */
+async function getCategoriesSafe() {
+  try {
+    return await prisma.category.findMany({
+      where: { active: true },
+      orderBy: { order: "asc" },
+      include: {
+        products: {
+          where: { active: true },
+          orderBy: { order: "asc" },
+          include: {
+            addons: { where: { active: true } },
+          },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    console.error(
+      "[home] Falha ao carregar cardápio — verifique DATABASE_URL e se as migrations foram aplicadas (prisma migrate deploy).",
+      error
+    );
+    return [];
+  }
+}
+
+export default async function HomePage() {
+  const categories = await getCategoriesSafe();
 
   const categoryViews: CategoryView[] = categories.map((category) => ({
     id: category.id,
