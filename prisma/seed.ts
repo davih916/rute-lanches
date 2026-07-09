@@ -908,6 +908,14 @@ async function seedAdmin() {
   // Login simplificado (só senha) enquanto o sistema está em teste.
   const email = process.env.SEED_ADMIN_EMAIL ?? "admin@rutelanches.com.br";
   const password = process.env.SEED_ADMIN_PASSWORD ?? "12345";
+
+  if (!process.env.SEED_ADMIN_EMAIL || !process.env.SEED_ADMIN_PASSWORD) {
+    console.warn(
+      "\n⚠️  SEED_ADMIN_EMAIL e/ou SEED_ADMIN_PASSWORD não definidas — usando valores de " +
+        "teste (senha \"12345\"). Em produção, defina as duas no ambiente antes de rodar o seed.\n"
+    );
+  }
+
   const passwordHash = await bcrypt.hash(password, 12);
 
   await prisma.admin.upsert({
