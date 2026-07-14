@@ -1,12 +1,11 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
-import { encryptSecret, decryptSecret } from "@/lib/crypto";
 import {
   NuvemFiscalProvider,
   type NuvemFiscalCredentials,
   type NuvemFiscalCompanyData,
 } from "@/lib/fiscal/providers/nuvem-fiscal-provider";
-import type { UpdateFiscalConfigInput } from "@/lib/validations/fiscal";
+import { getFiscalEnvConfig } from "@/lib/fiscal/env-config";
 import type { FiscalConfig } from "@prisma/client";
 
 const CONFIG_ID = "default";
@@ -21,6 +20,7 @@ export class FiscalConfigServiceError extends Error {
   }
 }
 
+/** Dados cadastrais da empresa emitente (CNPJ, endereço, CNAE...) — ver prisma/seed.ts para editar. */
 export async function getFiscalConfig(): Promise<FiscalConfig> {
   return prisma.fiscalConfig.upsert({
     where: { id: CONFIG_ID },
@@ -29,68 +29,19 @@ export async function getFiscalConfig(): Promise<FiscalConfig> {
   });
 }
 
-export type FiscalConfigForAdmin = Omit<FiscalConfig, "clientSecretEncrypted"> & {
-  hasClientSecret: boolean;
-};
-
-/** Nunca retorna o client_secret em texto puro — só um indicador de que existe um. */
-export async function getFiscalConfigForAdmin(): Promise<FiscalConfigForAdmin> {
-  const config = await getFiscalConfig();
-  const { clientSecretEncrypted, ...safe } = config;
-  return { ...safe, hasClientSecret: !!clientSecretEncrypted };
-}
-
-export async function updateFiscalConfig(input: UpdateFiscalConfigInput): Promise<FiscalConfigForAdmin> {
-  const current = await getFiscalConfig();
-  const clientSecretEncrypted = input.clientSecret
-    ? encryptSecret(input.clientSecret)
-    : current.clientSecretEncrypted;
-
-  const updated = await prisma.fiscalConfig.update({
-    where: { id: CONFIG_ID },
-    data: {
-      provider: input.provider,
-      ambiente: input.ambiente,
-      clientId: input.clientId || null,
-      clientSecretEncrypted,
-      cnpj: input.cnpj,
-      razaoSocial: input.razaoSocial,
-      nomeFantasia: input.nomeFantasia || null,
-      inscricaoEstadual: input.inscricaoEstadual,
-      inscricaoMunicipal: input.inscricaoMunicipal || null,
-      regimeTributario: input.regimeTributario,
-      email: input.email,
-      telefone: input.telefone || null,
-      cnaePrincipal: input.cnaePrincipal || null,
-      cnaeDescricao: input.cnaeDescricao || null,
-      logradouro: input.logradouro,
-      numero: input.numero,
-      complemento: input.complemento || null,
-      bairro: input.bairro,
-      municipioCodigo: input.municipioCodigo,
-      municipioNome: input.municipioNome,
-      uf: input.uf,
-      cep: input.cep,
-    },
-  });
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { clientSecretEncrypted: _omit, ...safe } = updated;
-  return { ...safe, hasClientSecret: !!updated.clientSecretEncrypted };
-}
-
 function buildProviderFromConfig(config: FiscalConfig): NuvemFiscalProvider {
-  if (!config.clientId || !config.clientSecretEncrypted || !config.cnpj) {
+  const env = getFiscalEnvConfig();
+  if (!env.clientId || !env.clientSecret || !config.cnpj) {
     throw new FiscalConfigServiceError(
-      "Preencha o provider, as credenciais e o CNPJ antes de continuar.",
+      "Credenciais da Nuvem Fiscal (env) ou CNPJ da empresa (FiscalConfig) ausentes.",
       "NOT_CONFIGURED"
     );
   }
 
   const credentials: NuvemFiscalCredentials = {
-    clientId: config.clientId,
-    clientSecret: decryptSecret(config.clientSecretEncrypted),
-    ambiente: config.ambiente === "producao" ? "producao" : "homologacao",
+    clientId: env.clientId,
+    clientSecret: env.clientSecret,
+    ambiente: env.ambiente,
     cnpj: config.cnpj,
     regimeTributario:
       config.regimeTributario === "normal" || config.regimeTributario === "mei"
@@ -101,7 +52,7 @@ function buildProviderFromConfig(config: FiscalConfig): NuvemFiscalProvider {
   return new NuvemFiscalProvider(credentials);
 }
 
-/** Cadastra (ou atualiza) a empresa emitente no provider fiscal. Chamado a partir da tela de Configurações → Fiscal. */
+/** Cadastra (ou atualiza) a empresa emitente no provider fiscal. Chamado automaticamente no boot — ver fiscal-certificate-service.ts. */
 export async function registerCompanyWithProvider(): Promise<void> {
   const config = await getFiscalConfig();
 
@@ -117,7 +68,7 @@ export async function registerCompanyWithProvider(): Promise<void> {
     !config.cep
   ) {
     throw new FiscalConfigServiceError(
-      "Preencha todos os dados da empresa (endereço completo incluído) antes de cadastrar.",
+      "Preencha todos os dados da empresa (endereço completo incluído) antes de cadastrar — ver prisma/seed.ts.",
       "NOT_CONFIGURED"
     );
   }
@@ -156,7 +107,7 @@ export async function registerCompanyWithProvider(): Promise<void> {
   });
 }
 
-/** Envia o certificado A1 (.pfx em base64 + senha) para o provider fiscal. */
+/** Envia o certificado A1 (.pfx em base64 + senha) para o provider fiscal. Chamado automaticamente no boot. */
 export async function uploadCertificate(pfxBase64: string, password: string): Promise<void> {
   const config = await getFiscalConfig();
   const provider = buildProviderFromConfig(config);

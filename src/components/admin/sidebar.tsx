@@ -2,14 +2,13 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutGrid, UtensilsCrossed, Tags, Settings, Receipt, LogOut } from "lucide-react";
+import { LayoutGrid, UtensilsCrossed, Tags, Settings, LogOut } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 const NAV_ITEMS = [
   { href: "/admin/dashboard", label: "Pedidos", icon: LayoutGrid },
   { href: "/admin/produtos", label: "Produtos", icon: UtensilsCrossed },
   { href: "/admin/categorias", label: "Categorias", icon: Tags },
-  { href: "/admin/fiscal", label: "Fiscal", icon: Receipt },
   { href: "/admin/configuracoes", label: "Configurações", icon: Settings },
 ];
 

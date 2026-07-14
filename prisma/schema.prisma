@@ -304,15 +304,13 @@ model Fiscal {
 // Configuração fiscal da loja (singleton, id fixo "default"). Guarda os
 // dados necessários para emitir NFC-e: cadastro da empresa, certificado
 // digital A1 e credenciais da API do provider fiscal.
+// Provider/ambiente/credenciais da API (Nuvem Fiscal) e o certificado A1 NÃO
+// ficam mais aqui — vêm de variáveis de ambiente e de um arquivo local no
+// servidor (ver src/lib/services/fiscal-certificate-service.ts e HANDOFF.md).
+// Esta tabela guarda só os dados cadastrais da empresa emitente (usados para
+// registrar a empresa no provider) e o status do certificado.
 model FiscalConfig {
-  id       String @id @default("default")
-  provider String @default("pending") // "pending" | "nuvem_fiscal"
-  ambiente String @default("homologacao") // "homologacao" | "producao"
-
-  // Credenciais da API do provider fiscal (ex: Nuvem Fiscal client_id/secret).
-  // clientSecret nunca é armazenado em texto puro — ver src/lib/crypto.ts.
-  clientId              String?
-  clientSecretEncrypted String?
+  id String @id @default("default")
 
   // Dados cadastrais da empresa emitente.
   cnpj               String?

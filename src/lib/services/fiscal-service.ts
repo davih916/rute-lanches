@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { getFiscalProvider } from "@/lib/fiscal";
+import { getFiscalEnvConfig } from "@/lib/fiscal/env-config";
 import { getOrderById } from "@/lib/services/order-service";
 import type { FiscalIssueItem } from "@/lib/fiscal/fiscal-provider.interface";
 import type { Fiscal } from "@prisma/client";
@@ -82,10 +83,7 @@ export async function issueFiscalDocumentForOrder(orderId: string): Promise<Fisc
     );
   }
 
-  const [provider, fiscalConfig] = await Promise.all([
-    getFiscalProvider(),
-    prisma.fiscalConfig.findUnique({ where: { id: "default" } }),
-  ]);
+  const provider = await getFiscalProvider();
 
   const result = await provider.issue({
     orderId: order.id,
@@ -105,7 +103,7 @@ export async function issueFiscalDocumentForOrder(orderId: string): Promise<Fisc
     data: {
       status: result.status,
       provider: provider.name,
-      ambiente: fiscalConfig?.ambiente ?? null,
+      ambiente: getFiscalEnvConfig().ambiente,
       externalId: result.externalId ?? null,
       numero: result.numero ?? null,
       serie: result.serie ?? null,

@@ -102,30 +102,9 @@ export const FISCAL_STATUS_LABELS: Record<FiscalStatus, string> = {
 export const RECEIPT_WIDTHS = ["58mm", "80mm"] as const;
 export type ReceiptWidth = (typeof RECEIPT_WIDTHS)[number];
 
-export const FISCAL_PROVIDERS = ["pending", "nuvem_fiscal"] as const;
-export type FiscalProviderName = (typeof FISCAL_PROVIDERS)[number];
-
-export const FISCAL_PROVIDER_LABELS: Record<FiscalProviderName, string> = {
-  pending: "Nenhum (não emite notas)",
-  nuvem_fiscal: "Nuvem Fiscal",
-};
-
-export const FISCAL_AMBIENTES = ["homologacao", "producao"] as const;
-export type FiscalAmbiente = (typeof FISCAL_AMBIENTES)[number];
-
-export const FISCAL_AMBIENTE_LABELS: Record<FiscalAmbiente, string> = {
-  homologacao: "Homologação (testes, sem valor fiscal)",
-  producao: "Produção (valor fiscal real)",
-};
-
-export const REGIMES_TRIBUTARIOS = ["simples_nacional", "normal", "mei"] as const;
-export type RegimeTributario = (typeof REGIMES_TRIBUTARIOS)[number];
-
-export const REGIME_TRIBUTARIO_LABELS: Record<RegimeTributario, string> = {
-  simples_nacional: "Simples Nacional",
-  normal: "Regime Normal (Lucro Presumido/Real)",
-  mei: "MEI",
-};
+// Provider/ambiente/regime tributário da emissão fiscal não são mais
+// configuráveis pelo painel — vêm de variáveis de ambiente e de FiscalConfig
+// (ver src/lib/fiscal/env-config.ts e prisma/seed.ts).
 
 export const PAGBANK_AMBIENTES = ["sandbox", "producao"] as const;
 export type PagBankAmbiente = (typeof PAGBANK_AMBIENTES)[number];

@@ -338,28 +338,81 @@ existem nem são necessárias `NEXTAUTH_SECRET`/`NEXTAUTH_URL`.
 produção da Nuvem Fiscal (com credenciais fictícias, retornando erro real `invalid_client`
 — confirma que a chamada HTTP está correta).
 
+**Atualizado em 2026-07-14: a tela `/admin/fiscal` foi removida.** Provider, ambiente e
+credenciais da Nuvem Fiscal agora vêm de variáveis de ambiente, e o certificado A1 vem de
+um arquivo local no servidor (instalado manualmente na implantação) em vez de upload pelo
+painel — ver §7.1 abaixo. `FiscalConfig` (banco) guarda só os dados cadastrais da empresa
+emitente (CNPJ, razão social, endereço, CNAE) e o status do certificado/cadastro.
+
 ### Arquitetura
 - `FiscalProvider` (interface) — `issue(input): Promise<FiscalIssueResult>`. Qualquer
   provider futuro (Focus NFe, PlugNotas) só precisa implementar essa interface.
-- `getFiscalProvider()` (`src/lib/fiscal/index.ts`) — factory **assíncrona**, lê
-  `FiscalConfig` do banco e decide: `PendingProvider` (com motivo específico do que falta:
-  sem credenciais / sem CNPJ / sem certificado) ou `NuvemFiscalProvider` (se tudo
-  configurado).
+- `getFiscalProvider()` (`src/lib/fiscal/index.ts`) — factory **assíncrona**. Provider/
+  ambiente/credenciais vêm de `getFiscalEnvConfig()` (`src/lib/fiscal/env-config.ts`,
+  variáveis de ambiente); CNPJ/regime tributário vêm de `FiscalConfig` (banco); o
+  certificado é validado a cada chamada (`validateLocalFiscalCertificate`, ver §7.1).
+  Decide entre `PendingProvider` (com motivo específico do que falta) ou
+  `NuvemFiscalProvider` (se tudo configurado e o certificado válido).
 - `NuvemFiscalProvider` — OAuth2 client_credentials (token cacheado em memória por
   `client_id`), `POST /empresas` (cadastro, com fallback para `PUT` se já existir), `PUT
   /empresas/{cnpj}/certificado` (upload do .pfx em base64), `POST /nfce` (emissão),
-  `GET /nfce/{id}/xml` e `/pdf` (download autenticado).
+  `GET /nfce/{id}/xml` e `/pdf` (download autenticado). **Nada disso mudou** — só a fonte
+  do certificado e das credenciais mudou (ver §7.1).
+
+### 7.1. Certificado A1 — arquivo local, sem upload pelo painel (2026-07-14)
+
+O certificado A1 (.pfx/.p12) **não fica no Git nem é enviado por upload no painel**. Ele é
+instalado manualmente no servidor durante a implantação do cliente:
+
+1. Copie o arquivo para `certs/` na raiz do projeto no servidor (pasta gitignored — ver
+   `certs/README.md`), ex: `certs/certificado.pfx`.
+2. No `.env` do servidor, defina:
+   ```
+   FISCAL_PROVIDER="nuvem_fiscal"
+   FISCAL_AMBIENTE="homologacao"   # ou "producao"
+   NUVEM_FISCAL_CLIENT_ID="..."
+   NUVEM_FISCAL_CLIENT_SECRET="..."
+   FISCAL_CERTIFICADO_PATH="./certs/certificado.pfx"
+   FISCAL_CERTIFICADO_SENHA="..."
+   ```
+3. Reinicie a aplicação (`npm start`/restart do processo).
+
+Na inicialização (`src/instrumentation.ts` → `ensureFiscalCertificateUploaded()` em
+`src/lib/services/fiscal-certificate-service.ts`):
+- valida que o arquivo existe, que a senha abre o `.pfx` (via `node-forge`) e que o
+  certificado não está vencido — loga um erro amigável (`console.warn`) se algo estiver
+  errado, sem derrubar a aplicação;
+- se estiver tudo certo e ainda não tiver sido enviado (ou o certificado mudou desde o
+  último envio — comparado por `FiscalConfig.certificadoValidoAte`), cadastra a empresa
+  (`registerCompanyWithProvider`) e envia o certificado (`uploadCertificate`) para a Nuvem
+  Fiscal automaticamente, gravando `empresaRegistradaEm`/`certificadoEnviadoEm` no banco.
+
+`getFiscalProvider()` também revalida o certificado local a cada emissão (não só no boot) —
+se o arquivo sumir ou vencer depois que a aplicação já estiver rodando, a emissão falha com
+um erro amigável em vez de tentar usar um certificado inválido.
+
+**Requer disco persistente** (VPS) — não funciona na Vercel, cujo sistema de arquivos é
+efêmero (mesmo problema já documentado em §15). O deploy de produção deste módulo pressupõe
+migração para um servidor com filesystem persistente.
 
 ### Fluxo de emissão
+
+Disparado de duas formas (ambas chamam a mesma função):
+1. **Manual**: admin clica "Emitir NFC-e" no pedido.
+2. **Automático**: pedido muda de "Preparando" para "Saiu para entrega/retirada" e o cliente
+   marcou "quero nota fiscal" no checkout (`Order.wantsInvoice`) — ver
+   `src/app/api/orders/[id]/status/route.ts`.
+
 ```
-Admin clica "Emitir NFC-e" no pedido (aparece só quando status = "Entregue")
-  ↓
 issueFiscalDocumentForOrder(orderId)  [src/lib/services/fiscal-service.ts]
   ↓
-Valida que TODOS os produtos do pedido têm ncm+cfop+csosnCst preenchidos
-  (senão: erro claro listando quais produtos faltam)
+Bloqueia se já está "emitida"
   ↓
-Bloqueia se já está "emitida" (evita nota duplicada)
+Reivindica a linha atomicamente (status → "emitindo") — evita que o disparo manual e o
+  automático emitam duas notas para o mesmo pedido se rodarem ao mesmo tempo
+  ↓
+Valida que TODOS os produtos do pedido têm ncm+cfop+csosnCst preenchidos
+  (senão: erro claro listando quais produtos faltam, e libera a reivindicação)
   ↓
 Monta payload NFCe padrão SEFAZ (ide, dest, det[], imposto.ICMS, pag[])
   ↓
@@ -367,13 +420,16 @@ provider.issue() → grava status/numero/serie/chaveAcesso/xml/pdf na tabela Fis
 ```
 
 ### O que precisa ser configurado antes de emitir de verdade
-1. `/admin/fiscal` → provider = "Nuvem Fiscal", `client_id`/`client_secret` reais, CNPJ,
-   razão social, IE, regime tributário, endereço completo.
-2. Botão "Cadastrar empresa no provider" (`POST /api/admin/fiscal/registrar-empresa`).
-3. Upload do certificado A1 (.pfx + senha) em `/admin/fiscal`.
+1. `.env` do servidor: `FISCAL_PROVIDER="nuvem_fiscal"`, `NUVEM_FISCAL_CLIENT_ID`/
+   `NUVEM_FISCAL_CLIENT_SECRET` reais, `FISCAL_AMBIENTE` (ver item 5).
+2. CNPJ/razão social/IE/regime tributário/endereço da empresa em `FiscalConfig` (já
+   seedado com os dados da Rute Lanches — ver `prisma/seed.ts`, `seedFiscalConfig`).
+3. Certificado A1 instalado em `certs/` no servidor + `FISCAL_CERTIFICADO_PATH`/
+   `FISCAL_CERTIFICADO_SENHA` no `.env` — ver §7.1. Cadastro da empresa e envio do
+   certificado para a Nuvem Fiscal acontecem sozinhos no boot da aplicação.
 4. `/admin/produtos` → preencher NCM/CFOP/CSOSN-CST/unidade de cada produto que vai ser
    vendido com nota fiscal (106 produtos, nenhum tem isso preenchido ainda por padrão).
-5. Trocar `ambiente` para "Produção" só depois de validar em homologação.
+5. Trocar `FISCAL_AMBIENTE` para `"producao"` só depois de validar em homologação.
 
 ### ⚠️ Pontos que precisam de revisão por um contador antes de ir para produção
 - **CSOSN/CST por produto**: hoje é um campo livre preenchido manualmente por produto —
