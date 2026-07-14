@@ -1,4 +1,5 @@
 import "server-only";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getOrderById } from "@/lib/services/order-service";
 import { getPagBankConfig, getPagBankBaseUrl, getPagBankToken } from "@/lib/services/pagbank-config-service";
@@ -47,9 +48,20 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
     throw new PagBankServiceError("Este pedido não usa pagamento Pix.", "NOT_PIX");
   }
 
-  await prisma.pixCharge.create({
-    data: { orderId, amountCents: order.totalCents, status: "aguardando_pagamento" },
-  });
+  try {
+    await prisma.pixCharge.create({
+      data: { orderId, amountCents: order.totalCents, status: "aguardando_pagamento" },
+    });
+  } catch (err) {
+    // Duas requisições concorrentes (ex: duas abas) podem passar pelo findUnique
+    // acima antes de qualquer uma criar a linha — o unique constraint em orderId
+    // pega a segunda tentativa aqui; devolve a cobrança que a primeira já criou.
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      const raceWinner = await prisma.pixCharge.findUnique({ where: { orderId } });
+      if (raceWinner) return raceWinner;
+    }
+    throw err;
+  }
 
   const config = await getPagBankConfig();
   let token: string;
@@ -129,32 +141,49 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
  * usado pelo webhook em vez de confiar direto no corpo da notificação recebida.
  */
 export async function confirmPixChargePaid(externalId: string): Promise<boolean> {
-  const config = await getPagBankConfig();
-  const token = getPagBankToken(config);
-  const baseUrl = getPagBankBaseUrl(config);
+  try {
+    const config = await getPagBankConfig();
+    const token = getPagBankToken(config);
+    const baseUrl = getPagBankBaseUrl(config);
 
-  const response = await fetch(`${baseUrl}/orders/${externalId}`, {
-    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
-  });
+    const response = await fetch(`${baseUrl}/orders/${externalId}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    });
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return false;
+    }
+
+    const data = (await response.json().catch(() => null)) as PagBankOrderResponse | null;
+    return data?.charges?.some((c) => c.status === "PAID") ?? false;
+  } catch (err) {
+    console.error("Erro ao confirmar pagamento Pix com o PagBank:", err instanceof Error ? err.message : err);
     return false;
   }
-
-  const data = (await response.json().catch(() => null)) as PagBankOrderResponse | null;
-  return data?.charges?.some((c) => c.status === "PAID") ?? false;
 }
 
-/** Marca a cobrança e o pedido como pagos. Idempotente. */
+/**
+ * Marca a cobrança como paga. Idempotente (a query já ignora se `status` já é
+ * "pago" — ver chamador). Não marca o pedido como pago se ele já foi
+ * cancelado nesse meio-tempo — fica registrado na própria cobrança para o
+ * lojista decidir sobre reembolso manualmente.
+ */
 export async function markPixChargePaid(orderId: string): Promise<void> {
-  await prisma.$transaction([
-    prisma.pixCharge.update({
-      where: { orderId },
-      data: { status: "pago", paidAt: new Date() },
-    }),
-    prisma.order.update({
-      where: { id: orderId },
-      data: { paymentStatus: "pago" },
-    }),
-  ]);
+  // updateMany (não update) porque não deve lançar se a cobrança já estiver
+  // paga — webhooks de pagamento chegam mais de uma vez com frequência.
+  await prisma.pixCharge.updateMany({
+    where: { orderId, status: { not: "pago" } },
+    data: { status: "pago", paidAt: new Date() },
+  });
+
+  const updated = await prisma.order.updateMany({
+    where: { id: orderId, status: { not: "cancelado" } },
+    data: { paymentStatus: "pago" },
+  });
+
+  if (updated.count === 0) {
+    console.error(
+      `Pix confirmado pelo PagBank para um pedido já cancelado (${orderId}) — verifique se precisa de reembolso.`
+    );
+  }
 }

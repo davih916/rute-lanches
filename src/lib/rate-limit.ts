@@ -61,3 +61,32 @@ export function registerFailedLoginAttempt(key: string): void {
 export function clearLoginAttempts(key: string): void {
   attempts.delete(key);
 }
+
+export function getClientIp(request: Request): string {
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+}
+
+/**
+ * Limitador simples de requisições por janela fixa (não depende de
+ * sucesso/falha, ao contrário do rate limit de login acima) — usado em rotas
+ * públicas que podem ser abusadas por script (criar pedidos, gerar Pix,
+ * webhook do PagBank).
+ */
+const requestWindows = new Map<string, { count: number; windowStart: number }>();
+
+export function checkRequestRateLimit(key: string, maxRequests: number, windowMs: number): RateLimitResult {
+  const now = Date.now();
+  const entry = requestWindows.get(key);
+
+  if (!entry || now - entry.windowStart > windowMs) {
+    requestWindows.set(key, { count: 1, windowStart: now });
+    return { blocked: false };
+  }
+
+  entry.count += 1;
+  if (entry.count > maxRequests) {
+    return { blocked: true, retryAfterSeconds: Math.ceil((entry.windowStart + windowMs - now) / 1000) };
+  }
+
+  return { blocked: false };
+}

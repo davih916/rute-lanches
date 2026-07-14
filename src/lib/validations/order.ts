@@ -32,8 +32,13 @@ export const createOrderSchema = z
     // Valor (em centavos) com que o cliente vai pagar em dinheiro — usado só
     // para calcular o troco. A conferência de que é >= total é feita no
     // order-service, pois o total só é conhecido depois de recalcular preços.
-    cashChangeForCents: z.number().int().positive().optional(),
-    cpfCnpj: z.string().trim().max(20).optional(),
+    cashChangeForCents: z.number().int().positive().max(100_000_00, "Valor de troco inválido").optional(),
+    cpfCnpj: z
+      .string()
+      .trim()
+      .transform((v) => v.replace(/\D/g, ""))
+      .refine((v) => v.length === 0 || v.length === 11 || v.length === 14, "CPF/CNPJ inválido")
+      .optional(),
     wantsInvoice: z.boolean().optional().default(false),
     notes: z.string().trim().max(500).optional(),
     items: z.array(orderItemInputSchema).min(1, "O carrinho está vazio"),
@@ -66,6 +71,10 @@ export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
 export const updateOrderStatusSchema = z.object({
   status: z.enum(["recebido", "preparando", "saiu_entrega", "entregue", "cancelado"]),
+  // Status que o cliente acredita que o pedido está no momento do clique —
+  // usado para evitar sobrescrever uma mudança concorrente feita por outro
+  // admin (ver updateOrderStatus). Opcional para não quebrar chamadores antigos.
+  previousStatus: z.enum(["recebido", "preparando", "saiu_entrega", "entregue", "cancelado"]).optional(),
 });
 
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;

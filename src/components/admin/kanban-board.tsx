@@ -78,14 +78,25 @@ export function KanbanBoard({ initialOrders }: KanbanBoardProps) {
   }
 
   const statusMutation = useMutation({
-    mutationFn: async ({ orderId, status }: { orderId: string; status: OrderStatus }) => {
+    mutationFn: async ({
+      orderId,
+      status,
+      previousStatus,
+    }: {
+      orderId: string;
+      status: OrderStatus;
+      previousStatus: OrderStatus;
+    }) => {
       const res = await fetch(`/api/orders/${orderId}/status`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, previousStatus }),
       });
-      if (!res.ok) throw new Error("Falha ao atualizar status");
-      return res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Falha ao atualizar status");
+      }
+      return data;
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
@@ -95,7 +106,7 @@ export function KanbanBoard({ initialOrders }: KanbanBoardProps) {
   function handleChangeStatus(orderId: string, status: OrderStatus, previousStatus: OrderStatus) {
     setUpdatingId(orderId);
     statusMutation.mutate(
-      { orderId, status },
+      { orderId, status, previousStatus },
       {
         onSuccess: () => {
           const shouldAutoPrint =
@@ -108,6 +119,11 @@ export function KanbanBoard({ initialOrders }: KanbanBoardProps) {
               "width=380,height=640"
             );
           }
+        },
+        onError: (error) => {
+          // Conflito (outra pessoa já mudou o status): a tela é atualizada
+          // sozinha pelo invalidateQueries no onSettled, só avisa o admin.
+          window.alert(error instanceof Error ? error.message : "Falha ao atualizar status.");
         },
         onSettled: () => setUpdatingId(null),
       }

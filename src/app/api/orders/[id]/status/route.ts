@@ -19,7 +19,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   }
 
   try {
-    let order = await updateOrderStatus(id, parsed.data.status, session.sub);
+    let order = await updateOrderStatus(
+      id,
+      parsed.data.status,
+      session.sub,
+      parsed.data.previousStatus
+    );
 
     // Pedido ficou pronto (saiu para entrega/retirada): emite a NFC-e sozinho
     // se o cliente marcou "quero nota fiscal" no checkout. Erros ficam
@@ -45,7 +50,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ order });
   } catch (err) {
     if (err instanceof OrderServiceError) {
-      return NextResponse.json({ error: err.message }, { status: 404 });
+      const status = err.code === "STATUS_CONFLICT" ? 409 : 404;
+      return NextResponse.json({ error: err.message }, { status });
     }
     console.error("Erro ao atualizar status do pedido:", err);
     return NextResponse.json({ error: "Erro ao atualizar status." }, { status: 500 });

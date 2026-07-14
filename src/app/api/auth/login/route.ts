@@ -2,11 +2,12 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { createSessionToken, setSessionCookie, verifyPassword } from "@/lib/auth";
 import { loginSchema } from "@/lib/validations/auth";
-import { checkLoginRateLimit, registerFailedLoginAttempt, clearLoginAttempts } from "@/lib/rate-limit";
-
-function getClientIp(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-}
+import {
+  checkLoginRateLimit,
+  registerFailedLoginAttempt,
+  clearLoginAttempts,
+  getClientIp,
+} from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);

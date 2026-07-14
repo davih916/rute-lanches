@@ -282,7 +282,8 @@ model Fiscal {
   order            Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   customerDocument String? // CPF/CNPJ opcional
   status           String    @default("aguardando_emissao")
-  // "aguardando_emissao" | "emitida" | "erro"
+  // "aguardando_emissao" | "emitindo" (reivindicado, evita emissão duplicada
+  // concorrente — ver fiscal-service.ts) | "emitida" | "erro"
   provider         String? // "pending" | "nuvem_fiscal" | "focus_nfe" | "plug_notas"
   ambiente         String? // "homologacao" | "producao" — em qual ambiente foi emitida
   externalId       String? // id do documento no provider (para consultas futuras)
@@ -381,5 +382,6 @@ model PixCharge {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  @@index([externalId])
   @@map("pix_charges")
 }

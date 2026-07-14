@@ -11,13 +11,13 @@ export const clientPasswordSchema = z.object({
 });
 
 export const clientProfileSchema = z.object({
-  empresaNome: z.string().trim().min(2, "Informe o nome da empresa."),
-  telefone: z.string().trim().optional().nullable(),
-  logradouro: z.string().trim().optional().nullable(),
-  numero: z.string().trim().optional().nullable(),
-  complemento: z.string().trim().optional().nullable(),
-  bairro: z.string().trim().optional().nullable(),
-  cidade: z.string().trim().optional().nullable(),
+  empresaNome: z.string().trim().min(2, "Informe o nome da empresa.").max(200),
+  telefone: z.string().trim().max(20).optional().nullable(),
+  logradouro: z.string().trim().max(200).optional().nullable(),
+  numero: z.string().trim().max(20).optional().nullable(),
+  complemento: z.string().trim().max(120).optional().nullable(),
+  bairro: z.string().trim().max(120).optional().nullable(),
+  cidade: z.string().trim().max(120).optional().nullable(),
   uf: z.string().trim().max(2).optional().nullable(),
-  cep: z.string().trim().optional().nullable(),
+  cep: z.string().trim().max(9).optional().nullable(),
 });

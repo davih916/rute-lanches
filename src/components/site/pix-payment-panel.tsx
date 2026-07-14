@@ -31,6 +31,8 @@ export function PixPaymentPanel({ orderId }: { orderId: string }) {
             clearInterval(pollRef.current);
           }
         }
+      } catch {
+        // Falha de rede num poll: ignora e tenta de novo no próximo ciclo de 5s.
       } finally {
         if (!cancelled) setLoading(false);
       }

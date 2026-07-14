@@ -2,9 +2,18 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { createOrderSchema } from "@/lib/validations/order";
 import { createOrder, listOrders, OrderServiceError } from "@/lib/services/order-service";
+import { checkRequestRateLimit, getClientIp } from "@/lib/rate-limit";
 
 /** Público: o cliente do site cria um pedido. */
 export async function POST(request: Request) {
+  const rateLimit = checkRequestRateLimit(`${getClientIp(request)}:create-order`, 10, 60_000);
+  if (rateLimit.blocked) {
+    return NextResponse.json(
+      { error: "Muitos pedidos em pouco tempo. Aguarde um instante e tente novamente." },
+      { status: 429 }
+    );
+  }
+
   const body = await request.json().catch(() => null);
   const parsed = createOrderSchema.safeParse(body);
 

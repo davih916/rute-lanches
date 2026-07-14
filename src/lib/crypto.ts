@@ -6,7 +6,7 @@ const IV_LENGTH = 12;
 
 function getKey(): Buffer {
   const secret = process.env.FISCAL_ENCRYPTION_KEY;
-  if (!secret || secret.length < 16) {
+  if (!secret || secret.length < 32) {
     throw new Error(
       "FISCAL_ENCRYPTION_KEY ausente ou muito curta. Defina uma string aleatória de pelo menos 32 caracteres no .env"
     );

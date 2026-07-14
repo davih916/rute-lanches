@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
 import { getOrCreatePixCharge, PagBankServiceError } from "@/lib/services/pagbank-service";
+import { checkRequestRateLimit, getClientIp } from "@/lib/rate-limit";
 
 /** Público: o cliente que acabou de fazer o pedido consulta/gera a cobrança Pix pelo id do pedido. */
-export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+
+  const rateLimit = checkRequestRateLimit(`${getClientIp(request)}:pix-get`, 30, 60_000);
+  if (rateLimit.blocked) {
+    return NextResponse.json({ error: "Muitas requisições. Aguarde um instante." }, { status: 429 });
+  }
 
   try {
     const charge = await getOrCreatePixCharge(id);

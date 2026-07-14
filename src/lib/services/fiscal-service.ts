@@ -16,9 +16,11 @@ export class FiscalServiceError extends Error {
 }
 
 /**
- * Emite a NFC-e de um pedido. Pode ser chamado a qualquer momento pelo admin
- * (normalmente depois que o pedido é marcado como "Entregue"), nunca
- * automaticamente — emitir nota fiscal é uma ação deliberada.
+ * Emite a NFC-e de um pedido. Chamada tanto manualmente (botão "Emitir NFC-e"
+ * no admin) quanto automaticamente quando o pedido sai para
+ * entrega/retirada e o cliente marcou "quero nota fiscal" no checkout (ver
+ * src/app/api/orders/[id]/status/route.ts). Segura contra as duas chamadas
+ * acontecerem ao mesmo tempo — ver a reivindicação atômica logo abaixo.
  */
 export async function issueFiscalDocumentForOrder(orderId: string): Promise<Fiscal> {
   const order = await getOrderById(orderId);
@@ -27,6 +29,21 @@ export async function issueFiscalDocumentForOrder(orderId: string): Promise<Fisc
   }
   if (order.fiscal?.status === "emitida") {
     throw new FiscalServiceError("Este pedido já tem uma NFC-e emitida.", "ALREADY_ISSUED");
+  }
+
+  // Reivindica a linha atomicamente antes de qualquer trabalho lento — fecha a
+  // janela de corrida entre o disparo automático (mudança de status) e o botão
+  // manual "Emitir NFC-e" rodando ao mesmo tempo, que de outra forma poderia
+  // gerar duas NFC-e reais para o mesmo pedido.
+  const claimed = await prisma.fiscal.updateMany({
+    where: { orderId, status: { notIn: ["emitida", "emitindo"] } },
+    data: { status: "emitindo" },
+  });
+  if (claimed.count === 0) {
+    throw new FiscalServiceError(
+      "Este pedido já está sendo emitido (ou já foi emitido) em outra requisição.",
+      "ALREADY_ISSUED"
+    );
   }
 
   const productIds = [...new Set(order.items.map((item) => item.productId))];
@@ -56,6 +73,9 @@ export async function issueFiscalDocumentForOrder(orderId: string): Promise<Fisc
   }
 
   if (missingProductNames.size > 0) {
+    // Libera a reivindicação acima — senão o pedido ficaria travado em
+    // "emitindo" para sempre e nenhuma tentativa futura conseguiria emitir.
+    await prisma.fiscal.update({ where: { orderId }, data: { status: "aguardando_emissao" } });
     throw new FiscalServiceError(
       `Preencha os dados fiscais (NCM, CFOP e CSOSN/CST) destes produtos antes de emitir: ${[...missingProductNames].join(", ")}`,
       "MISSING_FISCAL_DATA"

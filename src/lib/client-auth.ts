@@ -8,7 +8,7 @@ const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 
 function getJwtSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET;
-  if (!secret || secret.length < 16) throw new Error("JWT_SECRET ausente ou inválido.");
+  if (!secret || secret.length < 32) throw new Error("JWT_SECRET ausente ou inválido.");
   return new TextEncoder().encode(secret);
 }
 

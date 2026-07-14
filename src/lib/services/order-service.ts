@@ -19,6 +19,7 @@ export class OrderServiceError extends Error {
       | "ADDON_NOT_FOUND"
       | "ORDER_NOT_FOUND"
       | "INVALID_CASH_AMOUNT"
+      | "STATUS_CONFLICT"
   ) {
     super(message);
     this.name = "OrderServiceError";
@@ -147,6 +148,10 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
   });
 
   const order = await prisma.$transaction(async (tx) => {
+    // Seguro contra pedidos concorrentes gerarem o mesmo número: o UPDATE do
+    // Postgres bloqueia a linha "default" até a transação concorrente
+    // terminar (first-updater-wins), então cada transação sempre lê o valor
+    // já incrementado pela anterior.
     const updatedSettings = await tx.settings.update({
       where: { id: "default" },
       data: { lastOrderNumber: { increment: 1 } },
@@ -206,11 +211,31 @@ export async function getOrderById(id: string): Promise<OrderWithRelations | nul
 export async function updateOrderStatus(
   orderId: string,
   status: OrderStatus,
-  adminId: string
+  adminId: string,
+  previousStatus?: OrderStatus
 ): Promise<OrderWithRelations> {
   const existing = await prisma.order.findUnique({ where: { id: orderId } });
   if (!existing) {
     throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+
+  // Quando o chamador informa o status que esperava encontrar (ex: o Kanban
+  // sabe o que tinha na tela), faz a troca de forma condicional — protege
+  // contra dois admins mudando o mesmo pedido ao mesmo tempo: o segundo a
+  // chegar recebe STATUS_CONFLICT em vez de sobrescrever silenciosamente.
+  if (previousStatus) {
+    const updated = await prisma.order.updateMany({
+      where: { id: orderId, status: previousStatus },
+      data: { status },
+    });
+    if (updated.count === 0) {
+      throw new OrderServiceError(
+        "Este pedido já foi atualizado por outra pessoa. Atualize a tela e tente de novo.",
+        "STATUS_CONFLICT"
+      );
+    }
+    await prisma.orderStatusHistory.create({ data: { orderId, status, changedById: adminId } });
+    return (await getOrderById(orderId))!;
   }
 
   const [order] = await prisma.$transaction([
