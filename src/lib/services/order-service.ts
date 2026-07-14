@@ -159,6 +159,7 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
         status: "recebido",
         deliveryType: input.deliveryType,
         paymentMethod: input.paymentMethod,
+        wantsInvoice: input.wantsInvoice,
         cashChangeForCents: input.cashChangeForCents ?? null,
         itemsTotalCents,
         deliveryZoneId: deliveryZone?.id ?? null,

@@ -10,6 +10,7 @@ import {
   type OrderStatus,
 } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
+import { PixPaymentPanel } from "@/components/site/pix-payment-panel";
 
 export default async function OrderConfirmationPage({
   params,
@@ -100,6 +101,10 @@ export default async function OrderConfirmationPage({
           </p>
         </div>
       </div>
+
+      {order.paymentMethod === "pix" && order.paymentStatus === "pendente" && (
+        <PixPaymentPanel orderId={order.id} />
+      )}
 
       <Link href="/" className="mt-5 block">
         <Button variant="outline" size="lg" className="w-full">

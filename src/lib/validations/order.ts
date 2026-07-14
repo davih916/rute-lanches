@@ -34,6 +34,7 @@ export const createOrderSchema = z
     // order-service, pois o total só é conhecido depois de recalcular preços.
     cashChangeForCents: z.number().int().positive().optional(),
     cpfCnpj: z.string().trim().max(20).optional(),
+    wantsInvoice: z.boolean().optional().default(false),
     notes: z.string().trim().max(500).optional(),
     items: z.array(orderItemInputSchema).min(1, "O carrinho está vazio"),
   })

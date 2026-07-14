@@ -49,6 +49,7 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
   );
   const [needsChange, setNeedsChange] = useState(false);
   const [cashPayValue, setCashPayValue] = useState("");
+  const [wantsInvoice, setWantsInvoice] = useState(false);
   const [cpfCnpj, setCpfCnpj] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -103,6 +104,7 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
           deliveryZoneId: isDelivery ? deliveryZoneId : undefined,
           cashChangeForCents,
           cpfCnpj: cpfCnpj || undefined,
+          wantsInvoice,
           notes: notes || undefined,
           items: items.map((item) => ({
             productId: item.productId,
@@ -330,12 +332,23 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
           </div>
         )}
 
-        <Input
-          name="cpfCnpj"
-          label="CPF/CNPJ (opcional, para nota fiscal)"
-          value={cpfCnpj}
-          onChange={(e) => setCpfCnpj(e.target.value)}
-        />
+        <label className="flex items-center gap-2 text-sm font-medium text-neutral-700">
+          <input
+            type="checkbox"
+            className="size-4 rounded border-neutral-300"
+            checked={wantsInvoice}
+            onChange={(e) => setWantsInvoice(e.target.checked)}
+          />
+          Desejo nota fiscal (NFC-e)
+        </label>
+        {wantsInvoice && (
+          <Input
+            name="cpfCnpj"
+            label="CPF/CNPJ (opcional, aparece na nota)"
+            value={cpfCnpj}
+            onChange={(e) => setCpfCnpj(e.target.value)}
+          />
+        )}
         <Textarea
           name="notes"
           label="Observações do pedido"

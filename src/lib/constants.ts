@@ -127,5 +127,13 @@ export const REGIME_TRIBUTARIO_LABELS: Record<RegimeTributario, string> = {
   mei: "MEI",
 };
 
+export const PAGBANK_AMBIENTES = ["sandbox", "producao"] as const;
+export type PagBankAmbiente = (typeof PAGBANK_AMBIENTES)[number];
+
+export const PAGBANK_AMBIENTE_LABELS: Record<PagBankAmbiente, string> = {
+  sandbox: "Sandbox (testes, sem valor real)",
+  producao: "Produção (cobranças reais)",
+};
+
 export const SESSION_COOKIE_NAME = "rl_session";
 export const CLIENT_SESSION_COOKIE_NAME = "rl_client_session";

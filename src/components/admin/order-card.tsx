@@ -31,6 +31,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
   const next = NEXT_STATUS[status];
   const actionLabel = NEXT_STATUS_ACTION_LABEL[status];
   const isCash = (order.paymentMethod as PaymentMethod) === "dinheiro";
+  const isPix = (order.paymentMethod as PaymentMethod) === "pix";
 
   return (
     <div
@@ -116,7 +117,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
       )}
 
       <div className="flex items-center justify-between text-base">
-        <span className="font-semibold text-neutral-600">
+        <span className="flex items-center gap-2 font-semibold text-neutral-600">
           {getPaymentMethodLabel(order.paymentMethod)}
           {isCash &&
             (order.cashChangeForCents ? (
@@ -124,6 +125,18 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
             ) : (
               <> — sem troco</>
             ))}
+          {isPix && (
+            <span
+              className={
+                "rounded-full px-2 py-0.5 text-xs font-bold " +
+                (order.paymentStatus === "pago"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-amber-100 text-amber-700")
+              }
+            >
+              {order.paymentStatus === "pago" ? "Pago" : "Pendente"}
+            </span>
+          )}
         </span>
         <span className="text-xl font-extrabold text-neutral-900">
           {formatCentsToBRL(order.totalCents)}

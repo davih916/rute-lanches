@@ -183,7 +183,10 @@ model Order {
   // "entrega" | "retirada"
   paymentMethod    String
   // "pix" | "dinheiro" | "cartao_credito" | "cartao_debito"
+  paymentStatus    String    @default("pendente")
+  // "pendente" | "pago" | "erro" — independente do status de preparo acima.
   cashChangeForCents Int? // troco: valor com que o cliente vai pagar (só quando paymentMethod = "dinheiro")
+  wantsInvoice     Boolean   @default(false) // cliente marcou "quero nota fiscal" no checkout
   itemsTotalCents  Int
   deliveryZoneId   String? // bairro escolhido (só entrega) — taxa em deliveryFeeCents já é o snapshot
   deliveryZone     DeliveryZone? @relation(fields: [deliveryZoneId], references: [id], onDelete: Restrict)
@@ -197,6 +200,7 @@ model Order {
   items         OrderItem[]
   statusHistory OrderStatusHistory[]
   fiscal        Fiscal?
+  pixCharge     PixCharge?
 
   @@index([status])
   @@index([createdAt])
@@ -342,4 +346,40 @@ model FiscalConfig {
   updatedAt DateTime @updatedAt
 
   @@map("fiscal_config")
+}
+
+// Configuração da integração PagBank (singleton, id fixo "default"). Guarda as
+// credenciais para gerar cobranças PIX — mesmo padrão do FiscalConfig acima.
+model PagBankConfig {
+  id                    String    @id @default("default")
+  clientId              String?
+  clientSecretEncrypted String?
+  tokenEncrypted        String?
+  ambiente              String    @default("sandbox") // "sandbox" | "producao"
+  testadoEm             DateTime?
+  updatedAt             DateTime  @updatedAt
+
+  @@map("pagbank_config")
+}
+
+// Cobrança PIX de um pedido (1:1). Criada sob demanda quando o cliente acessa
+// a tela de pagamento; atualizada pelo webhook do PagBank quando o pagamento
+// é confirmado.
+model PixCharge {
+  id             String    @id @default(cuid())
+  orderId        String    @unique
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  externalId     String? // id da cobrança/pedido no PagBank
+  status         String    @default("aguardando_pagamento")
+  // "aguardando_pagamento" | "pago" | "expirado" | "erro"
+  qrCodeText     String? // código copia e cola
+  qrCodeImageUrl String? // link/imagem do QR Code retornado pelo PagBank
+  amountCents    Int
+  errorMessage   String?
+  paidAt         DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@map("pix_charges")
 }

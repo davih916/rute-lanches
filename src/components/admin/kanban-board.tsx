@@ -98,7 +98,10 @@ export function KanbanBoard({ initialOrders }: KanbanBoardProps) {
       { orderId, status },
       {
         onSuccess: () => {
-          if (previousStatus === "recebido" && status === "preparando") {
+          const shouldAutoPrint =
+            (previousStatus === "recebido" && status === "preparando") ||
+            (previousStatus === "preparando" && status === "saiu_entrega");
+          if (shouldAutoPrint) {
             window.open(
               `/admin/comanda/${orderId}?autoprint=1`,
               "_blank",
