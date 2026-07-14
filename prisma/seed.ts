@@ -887,14 +887,19 @@ async function seedCatalog() {
 async function seedSettings() {
   await prisma.settings.upsert({
     where: { id: "default" },
-    update: {},
+    // Contato oficial da empresa: sempre sincronizado, mesmo se a linha já existir
+    // (demais campos como cores/logo ficam só no `create` — são customização do admin).
+    update: {
+      whatsapp: "(15) 99633-0266",
+      address: "Rua Olga Charles Arruda, 12 - Jardim Josane, Sorocaba - SP",
+    },
     create: {
       id: "default",
       storeName: "Rute Lanches",
       primaryColor: "#F97316",
       secondaryColor: "#16A34A",
       whatsapp: "(15) 99633-0266",
-      address: "Rua das Lanchonetes, 123 - Centro",
+      address: "Rua Olga Charles Arruda, 12 - Jardim Josane, Sorocaba - SP",
       storeOpen: true,
       deliveryFeeCents: 500,
       minOrderCents: 1500,
@@ -902,6 +907,56 @@ async function seedSettings() {
     },
   });
   console.log("Configurações padrão da loja criadas.");
+}
+
+// Cadastro fiscal oficial da Rute Lanches (dados fornecidos pela cliente em
+// 2026-07-14). Servem de emitente padrão para a NFC-e — quem quiser trocar,
+// edita pela tela Admin → Fiscal.
+async function seedFiscalConfig() {
+  await prisma.fiscalConfig.upsert({
+    where: { id: "default" },
+    update: {
+      cnpj: "31187807000109",
+      razaoSocial: "Ruteneia Ferreira Melo",
+      nomeFantasia: "Rute Lanches",
+      inscricaoEstadual: "798.168.310.117",
+      inscricaoMunicipal: "385.400",
+      regimeTributario: "simples_nacional",
+      email: "rutefmelo@yahoo.com.br",
+      telefone: "(15) 99633-0266",
+      cnaePrincipal: "5611-2/03",
+      cnaeDescricao: "Lanchonetes, casas de chá, de sucos e similares",
+      logradouro: "Rua Olga Charles Arruda",
+      numero: "12",
+      complemento: null,
+      bairro: "Jardim Josane",
+      municipioCodigo: "3552205",
+      municipioNome: "Sorocaba",
+      uf: "SP",
+      cep: "18087300",
+    },
+    create: {
+      id: "default",
+      cnpj: "31187807000109",
+      razaoSocial: "Ruteneia Ferreira Melo",
+      nomeFantasia: "Rute Lanches",
+      inscricaoEstadual: "798.168.310.117",
+      inscricaoMunicipal: "385.400",
+      regimeTributario: "simples_nacional",
+      email: "rutefmelo@yahoo.com.br",
+      telefone: "(15) 99633-0266",
+      cnaePrincipal: "5611-2/03",
+      cnaeDescricao: "Lanchonetes, casas de chá, de sucos e similares",
+      logradouro: "Rua Olga Charles Arruda",
+      numero: "12",
+      bairro: "Jardim Josane",
+      municipioCodigo: "3552205",
+      municipioNome: "Sorocaba",
+      uf: "SP",
+      cep: "18087300",
+    },
+  });
+  console.log("Cadastro fiscal (fiscal_config) atualizado com os dados oficiais da empresa.");
 }
 
 async function seedAdmin() {
@@ -934,9 +989,39 @@ async function seedAdmin() {
   console.log("================================================\n");
 }
 
+async function seedClienteRuteLanches() {
+  const email = "rutefmelo@yahoo.com.br";
+  const cliente = await prisma.cliente.upsert({
+    where: { email },
+    update: {
+      empresaNome: "Rute Lanches", razaoSocial: "Ruteneia Ferreira Melo", cnpj: "31.187.807/0001-09",
+      regimeTributario: "Simples Nacional", inscricaoEstadual: "798.168.310.117", inscricaoMunicipal: "385.400",
+      telefone: "(15) 99633-0266", logradouro: "Rua Olga Charles Arruda", numero: "12", complemento: null,
+      bairro: "Jardim Josane", cidade: "Sorocaba", uf: "SP", cep: "18087-300", codigoIbge: "3552205",
+      cnaePrincipal: "5611-2/03", cnaeDescricao: "Lanchonetes, casas de chá, de sucos e similares", status: "ativo",
+      plano: "Plano Essencial", statusAssinatura: "ativa",
+    },
+    create: {
+      empresaNome: "Rute Lanches", razaoSocial: "Ruteneia Ferreira Melo", cnpj: "31.187.807/0001-09",
+      regimeTributario: "Simples Nacional", inscricaoEstadual: "798.168.310.117", inscricaoMunicipal: "385.400", email, telefone: "(15) 99633-0266",
+      logradouro: "Rua Olga Charles Arruda", numero: "12", bairro: "Jardim Josane", cidade: "Sorocaba", uf: "SP", cep: "18087-300", codigoIbge: "3552205",
+      cnaePrincipal: "5611-2/03", cnaeDescricao: "Lanchonetes, casas de chá, de sucos e similares",
+      status: "ativo", plano: "Plano Essencial", statusAssinatura: "ativa",
+    },
+  });
+  await prisma.clienteUsuario.upsert({
+    where: { email },
+    update: { clienteId: cliente.id, nome: "Ruteneia Ferreira Melo", ativo: true },
+    create: { clienteId: cliente.id, email, nome: "Ruteneia Ferreira Melo", passwordHash: await bcrypt.hash("Rute@2026", 12), deveAlterarSenha: true },
+  });
+  console.log("Cliente inicial Rute Lanches criado.");
+}
+
 async function main() {
   await seedSettings();
+  await seedFiscalConfig();
   await seedAdmin();
+  await seedClienteRuteLanches();
   await seedCatalog();
 }
 

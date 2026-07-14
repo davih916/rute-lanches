@@ -61,6 +61,8 @@ export async function updateFiscalConfig(input: UpdateFiscalConfigInput): Promis
       regimeTributario: input.regimeTributario,
       email: input.email,
       telefone: input.telefone || null,
+      cnaePrincipal: input.cnaePrincipal || null,
+      cnaeDescricao: input.cnaeDescricao || null,
       logradouro: input.logradouro,
       numero: input.numero,
       complemento: input.complemento || null,

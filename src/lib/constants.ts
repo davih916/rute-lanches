@@ -128,3 +128,4 @@ export const REGIME_TRIBUTARIO_LABELS: Record<RegimeTributario, string> = {
 };
 
 export const SESSION_COOKIE_NAME = "rl_session";
+export const CLIENT_SESSION_COOKIE_NAME = "rl_client_session";

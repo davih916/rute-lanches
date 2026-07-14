@@ -31,6 +31,56 @@ model Admin {
   @@map("admins")
 }
 
+// Empresa assinante da plataforma. O acesso ao painel do cliente é mantido
+// separado dos administradores da loja para não misturar permissões.
+model Cliente {
+  id                 String   @id @default(cuid())
+  empresaNome        String
+  razaoSocial        String
+  cnpj               String   @unique
+  regimeTributario   String
+  inscricaoEstadual  String?
+  inscricaoMunicipal String?
+  email              String   @unique
+  telefone           String?
+  logradouro         String?
+  numero             String?
+  complemento        String?
+  bairro             String?
+  cidade             String?
+  uf                 String?
+  cep                String?
+  codigoIbge         String?
+  cnaePrincipal      String?
+  cnaeDescricao      String?
+  status             String   @default("ativo")
+  plano              String   @default("Plano Essencial")
+  statusAssinatura   String   @default("ativa")
+  proximoVencimento  DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  usuarios ClienteUsuario[]
+
+  @@map("clientes")
+}
+
+model ClienteUsuario {
+  id                    String   @id @default(cuid())
+  clienteId             String
+  cliente               Cliente  @relation(fields: [clienteId], references: [id], onDelete: Cascade)
+  email                 String   @unique
+  passwordHash          String
+  nome                  String
+  ativo                 Boolean  @default(true)
+  deveAlterarSenha      Boolean  @default(true)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([clienteId])
+  @@map("clientes_usuarios")
+}
+
 model Category {
   id        String    @id @default(cuid())
   name      String
@@ -268,6 +318,10 @@ model FiscalConfig {
   regimeTributario   String? // "simples_nacional" | "normal" | "mei"
   email              String?
   telefone           String?
+
+  // Atividade econômica principal (CNAE), exibida no cadastro fiscal.
+  cnaePrincipal  String?
+  cnaeDescricao  String?
 
   // Endereço da empresa (exigido pela SEFAZ no cadastro do emitente).
   logradouro     String?

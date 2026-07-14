@@ -22,6 +22,8 @@ export const updateFiscalConfigSchema = z.object({
   regimeTributario: z.enum(REGIMES_TRIBUTARIOS),
   email: z.string().trim().email("E-mail inválido"),
   telefone: z.string().trim().max(20).optional().or(z.literal("")),
+  cnaePrincipal: z.string().trim().max(20).optional().or(z.literal("")),
+  cnaeDescricao: z.string().trim().max(200).optional().or(z.literal("")),
   logradouro: z.string().trim().min(2).max(200),
   numero: z.string().trim().min(1).max(20),
   complemento: z.string().trim().max(120).optional().or(z.literal("")),

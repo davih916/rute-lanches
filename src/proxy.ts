@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
-import { SESSION_COOKIE_NAME } from "@/lib/constants";
+import { CLIENT_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME } from "@/lib/constants";
 
 async function isValidSession(token: string | undefined): Promise<boolean> {
   if (!token) return false;
@@ -17,6 +17,17 @@ async function isValidSession(token: string | undefined): Promise<boolean> {
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (pathname.startsWith("/cliente")) {
+    if (pathname === "/cliente/login" || pathname === "/cliente/esqueci-senha") return NextResponse.next();
+    const validClientSession = await isValidSession(request.cookies.get(CLIENT_SESSION_COOKIE_NAME)?.value);
+    if (!validClientSession) {
+      const loginUrl = new URL("/cliente/login", request.url);
+      loginUrl.searchParams.set("from", pathname);
+      return NextResponse.redirect(loginUrl);
+    }
+    return NextResponse.next();
+  }
 
   const isPublicAdminRoute = pathname === "/admin/login";
   if (isPublicAdminRoute) {
@@ -39,5 +50,5 @@ export async function proxy(request: NextRequest) {
 // /api faz sua própria checagem de sessão via getSession() — necessário
 // porque algumas (ex: POST /api/orders) são públicas por design.
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/cliente/:path*"],
 };

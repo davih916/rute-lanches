@@ -22,7 +22,7 @@ export default function Error({
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 px-4 text-center">
       <p className="text-lg font-bold text-neutral-900">Algo deu errado</p>
       <p className="max-w-sm text-sm text-neutral-500">
-        Não foi possível carregar esta página agora. Tente novamente em instantes.
+        Não foi possível carregar esta página. Tente novamente.
       </p>
       {error.digest && (
         <p className="text-xs text-neutral-400">Código de referência: {error.digest}</p>

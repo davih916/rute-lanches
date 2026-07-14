@@ -36,6 +36,8 @@ export function FiscalConfigForm({ config }: FiscalConfigFormProps) {
   );
   const [email, setEmail] = useState(config.email ?? "");
   const [telefone, setTelefone] = useState(config.telefone ?? "");
+  const [cnaePrincipal, setCnaePrincipal] = useState(config.cnaePrincipal ?? "");
+  const [cnaeDescricao, setCnaeDescricao] = useState(config.cnaeDescricao ?? "");
   const [logradouro, setLogradouro] = useState(config.logradouro ?? "");
   const [numero, setNumero] = useState(config.numero ?? "");
   const [complemento, setComplemento] = useState(config.complemento ?? "");
@@ -71,6 +73,8 @@ export function FiscalConfigForm({ config }: FiscalConfigFormProps) {
           regimeTributario,
           email,
           telefone,
+          cnaePrincipal,
+          cnaeDescricao,
           logradouro,
           numero,
           complemento,
@@ -231,6 +235,22 @@ export function FiscalConfigForm({ config }: FiscalConfigFormProps) {
             label="Telefone"
             value={telefone}
             onChange={(e) => setTelefone(e.target.value)}
+          />
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Input
+            name="cnaePrincipal"
+            label="CNAE principal"
+            className="col-span-1"
+            value={cnaePrincipal}
+            onChange={(e) => setCnaePrincipal(e.target.value)}
+          />
+          <Input
+            name="cnaeDescricao"
+            label="Descrição da atividade"
+            className="col-span-2"
+            value={cnaeDescricao}
+            onChange={(e) => setCnaeDescricao(e.target.value)}
           />
         </div>
       </div>
