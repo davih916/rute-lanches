@@ -9,13 +9,14 @@ import packageJson from "../../../../package.json";
 export async function GET() {
   const start = Date.now();
   let databaseConnected = false;
-  let databaseError: string | null = null;
 
   try {
     await prisma.$queryRaw`SELECT 1`;
     databaseConnected = true;
   } catch (err) {
-    databaseError = err instanceof Error ? err.message : "Erro desconhecido ao conectar no banco.";
+    // Não devolve err.message no corpo público — pode conter host/porta/credenciais
+    // da conexão. Fica só no log do servidor.
+    console.error("[GET /api/health] Falha ao conectar no banco:", err);
   }
 
   const ok = databaseConnected;
@@ -29,7 +30,6 @@ export async function GET() {
       database: {
         connected: databaseConnected,
         latencyMs: Date.now() - start,
-        error: databaseError,
       },
       timestamp: new Date().toISOString(),
     },

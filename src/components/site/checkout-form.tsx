@@ -21,7 +21,11 @@ import {
 } from "@/store/cart-store";
 
 function generatePlaceholderPhone(): string {
-  return `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+  // Telefone é único no cadastro do cliente — precisa de entropia suficiente
+  // pra duas vendas no balcão no mesmo milissegundo não colidirem e serem
+  // silenciosamente tratadas como o mesmo cliente (upsert por telefone).
+  const random = crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000;
+  return `${Date.now()}${random.toString().padStart(6, "0")}`;
 }
 
 interface DeliveryZoneOption {
@@ -63,9 +67,13 @@ export function CheckoutForm({
   const clear = useCartStoreHook((s) => s.clear);
 
   const hasDeliveryZones = deliveryZones.length > 0;
-  const [deliveryType, setDeliveryType] = useState<DeliveryType>(
-    hasDeliveryZones && deliveryTypeOptions.includes("entrega") ? "entrega" : deliveryTypeOptions[0]
-  );
+  const [deliveryType, setDeliveryType] = useState<DeliveryType>(() => {
+    if (hasDeliveryZones && deliveryTypeOptions.includes("entrega")) return "entrega";
+    // "entrega" indisponível (sem bairro cadastrado) — não pode ser a opção
+    // inicial, senão o formulário abre com os campos de endereço de uma
+    // opção que está desabilitada e não pode ser enviada.
+    return deliveryTypeOptions.find((type) => type !== "entrega") ?? deliveryTypeOptions[0];
+  });
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
@@ -87,9 +95,16 @@ export function CheckoutForm({
   const [hasSubmitted, setHasSubmitted] = useState(false);
 
   useEffect(() => {
-    if (redirectIfEmpty && items.length === 0 && !hasSubmitted) {
-      router.replace("/");
-    }
+    if (!redirectIfEmpty) return;
+    // O carrinho persistido (zustand + localStorage) só é reidratado depois
+    // da primeira renderização — sem esse atraso, todo cliente seria
+    // redirecionado de volta pro cardápio antes do carrinho real carregar.
+    const timer = setTimeout(() => {
+      if (items.length === 0 && !hasSubmitted) {
+        router.replace("/");
+      }
+    }, 300);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items.length, hasSubmitted, redirectIfEmpty]);
 

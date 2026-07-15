@@ -34,10 +34,14 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
-COPY --from=builder /app/node_modules/tsx ./node_modules/tsx
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+# O standalone do Next já traz um node_modules enxuto só com o que o SERVIDOR
+# precisa em runtime — mas `npx prisma migrate deploy` no CMD abaixo roda o
+# CLI do Prisma, que tem suas próprias dependências (dotenv, c12, effect...)
+# não incluídas ali. Mais simples e confiável copiar o node_modules completo
+# do builder (perde um pouco do ganho de tamanho do standalone, mas evita
+# quebrar o `migrate deploy` por dependência faltando).
+COPY --from=builder /app/node_modules ./node_modules
 
 RUN mkdir -p /app/certs /app/logs && chown -R nextjs:nodejs /app/certs /app/logs
 
