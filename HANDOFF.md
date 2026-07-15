@@ -1,871 +1,967 @@
-# Rute Lanches — Documentação de handoff
+# HANDOFF — Rute Lanches
 
-> Documento de referência para continuar o desenvolvimento em outra conversa/sessão.
-> Reflete o estado do projeto em **2026-07-09** (última atualização: correção do deploy em
-> produção na Vercel — troca de SQLite para PostgreSQL, migrations regeradas, error
-> boundaries e fallbacks seguros nas páginas públicas — ver §15. Antes disso: CRUD de
-> produtos e categorias + upload de foto de produto + troca de senha do admin + controle
-> operacional da loja — horário de funcionamento + formas de pagamento aceitas + taxa de
-> entrega por bairro). Sempre confira o código-fonte antes de assumir que algo aqui ainda é verdade — este arquivo pode ficar
-> desatualizado.
+> Documento oficial do projeto. Escrito para que qualquer pessoa (ou qualquer nova
+> conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
+> algo mudar de forma relevante, atualize este arquivo.
+>
+> Última atualização: 2026-07-15 (fim da sessão de preparação para produção).
 
 ---
 
-## 1. Visão geral
+## Índice
 
-Sistema de cardápio digital + painel administrativo para a lanchonete **Rute Lanches**,
-construído para também servir de base replicável (outros clientes no futuro, trocando só
-dados de configuração — nunca texto fixo no código).
-
-Fluxo principal já funcionando ponta a ponta:
-
-```
-Cliente monta pedido no site
-        ↓
-Pedido salvo no banco (nº sequencial, status "recebido")
-        ↓
-Aparece no Kanban do admin (alerta sonoro repetindo até "reconhecer")
-        ↓
-Funcionário clica "Aceitar pedido" → status "preparando"
-        ↓
-Comanda de cozinha imprime automaticamente (fonte grande, só o essencial)
-        ↓
-Segue: "Saiu para entrega" → "Entregue" (ou "Cancelado" a qualquer momento)
-        ↓
-Admin pode emitir NFC-e manualmente no pedido entregue (Nuvem Fiscal)
-```
+1. [Arquitetura completa do sistema](#1-arquitetura-completa-do-sistema)
+2. [Tecnologias utilizadas](#2-tecnologias-utilizadas)
+3. [Estrutura de pastas](#3-estrutura-de-pastas)
+4. [Banco de dados](#4-banco-de-dados)
+5. [Fluxo de autenticação](#5-fluxo-de-autenticação)
+6. [Fluxo de pedidos](#6-fluxo-de-pedidos)
+7. [Fluxo da Venda no Balcão](#7-fluxo-da-venda-no-balcão)
+8. [Fluxo do cliente (portal B2B)](#8-fluxo-do-cliente-portal-b2b)
+9. [Fluxo do admin](#9-fluxo-do-admin)
+10. [Fluxo do PagBank (Pix)](#10-fluxo-do-pagbank-pix)
+11. [Fluxo da emissão fiscal (NFC-e)](#11-fluxo-da-emissão-fiscal-nfc-e)
+12. [Fluxo da impressão](#12-fluxo-da-impressão)
+13. [Configuração do VPS](#13-configuração-do-vps)
+14. [Docker, PM2, Nginx e PostgreSQL](#14-docker-pm2-nginx-e-postgresql)
+15. [Variáveis de ambiente](#15-variáveis-de-ambiente)
+16. [Scripts de deploy/update/backup/restore](#16-scripts-de-deployupdatebackuprestore)
+17. [Tudo que já foi implementado](#17-tudo-que-já-foi-implementado)
+18. [Tudo que foi alterado nesta sessão](#18-tudo-que-foi-alterado-nesta-sessão)
+19. [Bugs corrigidos](#19-bugs-corrigidos)
+20. [Decisões arquiteturais e motivos](#20-decisões-arquiteturais-e-motivos)
+21. [Pendências restantes](#21-pendências-restantes)
+22. [Deploy completo em VPS do zero](#22-deploy-completo-em-vps-do-zero)
+23. [Configurar PagBank, Nuvem Fiscal e certificado A1](#23-configurar-pagbank-nuvem-fiscal-e-certificado-a1)
+24. [Checklist de produção](#24-checklist-de-produção)
+25. [Credenciais/segredos necessários](#25-credenciaissegredos-necessários-sem-valores)
+26. [Próximas melhorias sugeridas](#26-próximas-melhorias-sugeridas)
 
 ---
 
-## 2. Stack
+## 1. Arquitetura completa do sistema
 
-| Camada | Tecnologia | Versão (na época) |
+Rute Lanches é um sistema de pedidos para uma lanchonete (Sorocaba/SP — Ruteneia Ferreira
+Melo, nome fantasia "Rute Lanches"). É uma aplicação **Next.js monolítica** (App Router),
+com um único banco Postgres, cobrindo:
+
+- **Site público** (cardápio + checkout) para clientes finais fazerem pedidos.
+- **Painel administrativo** (Kanban de pedidos, produtos, categorias, configurações,
+  venda no balcão) para a equipe da loja.
+- **Portal do cliente B2B** (`/cliente`) — uma área separada para empresas que assinam o
+  sistema como clientes da plataforma (não confundir com "cliente" = consumidor final do
+  lanche; ver §8).
+- **Integrações externas**: PagBank (Pix) e Nuvem Fiscal (NFC-e).
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Navegador do usuário                      │
+│   Cliente final       Admin/funcionário       Empresa-cliente    │
+└──────┬───────────────────────┬───────────────────────┬──────────┘
+       │ /                     │ /admin/*              │ /cliente/*
+       ▼                       ▼                       ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Next.js App Router (um único app)              │
+│  src/proxy.ts (middleware) — protege /admin/* e /cliente/*        │
+│  Route Handlers (src/app/api/**) — toda a lógica de servidor      │
+│  Server Components — leem direto do Prisma (sem API intermediária)│
+└──────┬───────────────────────────────────────┬──────────────────┘
+       │ Prisma Client                          │ fetch()
+       ▼                                         ▼
+┌─────────────────┐                    ┌─────────────────────────┐
+│   PostgreSQL     │                    │  APIs externas           │
+│  (Neon em dev/   │                    │  - Nuvem Fiscal (NFC-e)  │
+│   staging; VPS    │                    │  - PagBank (Pix)         │
+│   em produção)    │                    └─────────────────────────┘
+└─────────────────┘
+```
+
+**Sem microsserviços, sem fila de mensagens, sem cache externo (Redis etc.)** — tudo é
+request/response síncrono dentro do próprio processo Next.js. Isso é deliberado (ver §20)
+dado o porte do negócio (uma lanchonete, não uma rede).
+
+### Camadas do código (server-side)
+
+```
+route.ts (API)  ──▶  services (src/lib/services/*)  ──▶  Prisma  ──▶  Postgres
+                         │
+                         └──▶  validations (zod, src/lib/validations/*)
+```
+
+- **`route.ts`**: só faz autenticação/parse/validação zod/chamada do service/formatar
+  resposta HTTP. Nenhuma regra de negócio mora aqui.
+- **`services`**: toda a regra de negócio. Lançam erros tipados (`XxxServiceError` com um
+  `code`) que o `route.ts` traduz pro status HTTP certo.
+- **Server Components** (páginas): podem chamar os services diretamente (sem passar por
+  uma API route) quando é só leitura para renderizar a própria página.
+
+---
+
+## 2. Tecnologias utilizadas
+
+| Camada | Tecnologia | Versão |
 |---|---|---|
 | Framework | Next.js (App Router, Turbopack) | 16.2.10 |
 | Linguagem | TypeScript | ^5 |
 | UI | React | 19.2.4 |
-| Estilo | Tailwind CSS (CSS-first, `@theme`) | ^4 |
-| Banco / ORM | PostgreSQL via Prisma (trocado de SQLite em 2026-07-09, ver §4) | Prisma ^6.19.3 |
-| Estado do carrinho | Zustand (persistido em localStorage) | ^5 |
-| Data fetching do painel | TanStack Query (polling 5s) | ^5 |
-| Auth | Cookie JWT httpOnly (`jose`) + bcrypt (`bcryptjs`) | jose ^6, bcryptjs ^3 |
-| Validação | Zod em todas as fronteiras (API routes) | ^4 |
-| Fiscal | Adapter próprio para Nuvem Fiscal (REST + OAuth2) | — |
-
-**Por que essas escolhas / desvios do "padrão":**
-- **PostgreSQL** (era SQLite até 2026-07-09): o deploy na Vercel quebrava com "A server
-  error occurred" em qualquer página — causa raiz era `DATABASE_URL="file:./dev.db"`, que
-  não funciona em runtime serverless (sistema de arquivos read-only/efêmero, sem
-  persistência entre invocações). Nenhum código de aplicação dependia de SQLite
-  especificamente (nada de `$queryRaw`/`PRAGMA`), então a troca de `provider` no
-  `schema.prisma` foi limpa. **As 6 migrations antigas (sintaxe SQLite) foram substituídas
-  por uma única migration nova (`20260707160000_init_postgresql`)** gerada via `prisma
-  migrate diff --from-empty --to-schema-datamodel` — histórico de migrations reiniciado de
-  propósito porque o banco de produção nunca tinha sido usado (nenhum dado a preservar).
-  Preços continuam em **centavos (Int)** — não é mais uma limitação do driver (Postgres tem
-  `Decimal`), mas evita bugs de ponto flutuante de qualquer forma, e trocar exigiria migrar
-  todos os valores já gravados.
-- **Status como `String`, não enum nativo do banco**: portabilidade entre SQLite/Postgres/
-  MySQL. Os valores válidos vivem em `src/lib/constants.ts` (`as const` + `Record<...>`) e
-  são validados via Zod nas API routes — nunca confie só no tipo do Prisma.
-- **`src/proxy.ts` em vez de `middleware.ts`**: o Next 16 renomeou (deprecou) a convenção
-  `middleware` para `proxy` (mesmo runtime Node.js por padrão agora). Migração feita com o
-  codemod oficial `middleware-to-proxy`. Só ele protege as **páginas** `/admin/*`; cada API
-  route sob `/api` faz sua própria checagem de sessão via `getSession()` porque algumas
-  (ex: `POST /api/orders`) são públicas por design.
-- **Sem WebSocket/Socket.io**: o Kanban usa polling de 5s via TanStack Query. Decisão
-  consciente de simplificação (menos infra para deployar); documentado como possível
-  upgrade futuro, não como limitação escondida.
-- **Sem fila/job assíncrono para NFC-e**: emissão é síncrona dentro do próprio request da
-  API route. Aceitável porque NFC-e é processada em tempo real pela SEFAZ (diferente de
-  NF-e, que pode ser assíncrona/lote).
+| Estilo | Tailwind CSS | ^4 |
+| Banco | PostgreSQL | 16 (compose) / Neon (dev atual) |
+| ORM | Prisma | ^6.19.3 |
+| Validação | Zod | ^4.4.3 |
+| Estado do carrinho | Zustand (+ `persist`/localStorage) | ^5.0.14 |
+| Data-fetching client-side (Kanban) | @tanstack/react-query | ^5.101.2 |
+| Autenticação | JWT via `jose`, cookies httpOnly | ^6.2.3 |
+| Hash de senha | bcryptjs | ^3.0.3 |
+| Certificado A1 (parse PKCS12) | node-forge | ^1.4.0 |
+| Ícones | lucide-react | ^1.23.0 |
+| Processo em produção (sem Docker) | PM2 | (instalado no VPS) |
+| Containers (opcional) | Docker + Docker Compose | — |
+| Proxy reverso | Nginx | 1.27 (imagem Docker) / apt (bare-metal) |
+| Emissão fiscal | API Nuvem Fiscal (NFC-e) | — |
+| Pagamento Pix | API PagBank (PagSeguro) | — |
 
 ---
 
 ## 3. Estrutura de pastas
 
 ```
-prisma/
-  schema.prisma          — todos os models
-  seed.ts                 — cardápio real + admin + settings (idempotente-ish, ver §9)
-  migrations/             — 4 migrations até agora (ver §4)
-prisma.config.ts          — config do Prisma 6 (evita warning de package.json#prisma)
+rute-lanches/
+├── prisma/
+│   ├── schema.prisma              # schema único, comentado em português
+│   ├── seed.ts                    # cardápio real + admin + fiscal + cliente B2B seed
+│   └── migrations/                # 7 migrations, ver §4
+├── src/
+│   ├── app/
+│   │   ├── (site)/                # grupo de rotas do site público
+│   │   │   ├── page.tsx           # home = cardápio
+│   │   │   ├── checkout/page.tsx
+│   │   │   ├── pedido/[id]/page.tsx  # confirmação/acompanhamento do pedido
+│   │   │   └── layout.tsx
+│   │   ├── admin/
+│   │   │   ├── login/page.tsx     # única rota admin fora do grupo protegido
+│   │   │   ├── comanda/[id]/page.tsx  # impressão (fora do layout admin, sem sidebar)
+│   │   │   └── (protected)/       # exige sessão admin (ver proxy.ts)
+│   │   │       ├── layout.tsx     # sidebar + checagem de sessão
+│   │   │       ├── dashboard/     # Kanban de pedidos
+│   │   │       ├── produtos/
+│   │   │       ├── categorias/
+│   │   │       ├── configuracoes/ # Settings + PagBank + bairros + trocar senha
+│   │   │       └── nova-venda/    # Venda no Balcão
+│   │   ├── cliente/                # portal B2B (fora de /admin, sessão própria)
+│   │   │   ├── login/
+│   │   │   ├── esqueci-senha/
+│   │   │   └── painel/
+│   │   └── api/                    # todas as Route Handlers, ver árvore completa abaixo
+│   ├── components/
+│   │   ├── admin/                  # Kanban, forms de config, Nova Venda, etc.
+│   │   ├── client/                 # portal B2B
+│   │   ├── print/                  # comanda + print-controller
+│   │   ├── site/                   # cardápio, carrinho, checkout, Pix
+│   │   └── ui/                     # Button/Input/Select/Modal/Textarea/Badge genéricos
+│   ├── lib/
+│   │   ├── services/                # regra de negócio (um arquivo por domínio)
+│   │   ├── validations/              # schemas zod
+│   │   ├── fiscal/                   # provider fiscal (interface + Nuvem Fiscal + pending)
+│   │   ├── auth.ts / client-auth.ts  # sessão JWT admin / cliente B2B
+│   │   ├── crypto.ts                 # AES-256-GCM p/ secrets no banco (PagBank)
+│   │   ├── rate-limit.ts             # rate limit em memória
+│   │   ├── constants.ts              # enums compartilhados (status, tipos, labels)
+│   │   ├── prisma.ts                 # singleton do PrismaClient
+│   │   └── types.ts / types/client.ts
+│   ├── store/                        # cart-store.ts (site) + balcao-cart-store.ts (admin)
+│   ├── instrumentation.ts            # boot hook — valida/envia certificado fiscal
+│   └── proxy.ts                      # middleware (protege /admin/* e /cliente/*)
+├── certs/                            # certificado A1 (.pfx) — NUNCA no Git
+├── logs/                             # logs do PM2/nginx/scripts — NUNCA no Git
+├── backups/                          # dumps do Postgres — NUNCA no Git
+├── public/uploads/                   # fotos de produto — NUNCA no Git
+├── nginx/default.conf                # config do reverse proxy
+├── scripts/                          # install/update/backup/restore.sh
+├── Dockerfile, docker-compose.yml, .dockerignore
+├── ecosystem.config.js               # PM2
+├── .env.production.example
+└── HANDOFF.md                        # este arquivo
+```
 
-src/
-  proxy.ts                 — protege páginas /admin/* (substitui middleware.ts no Next 16)
+### Árvore completa de `src/app/api/`
 
-  app/
-    layout.tsx             — layout raiz, injeta cores da marca via <style> inline (Settings)
-    globals.css            — Tailwind 4 + tokens de marca + CSS de impressão (@media print)
-    robots.ts               — disallow /admin
-    (site)/                 — grupo de rotas público
-      layout.tsx            — header/footer/cart drawer, busca Settings
-      page.tsx               — cardápio (Server Component, lê Category+Product do Prisma)
-      checkout/page.tsx
-      pedido/[id]/page.tsx   — confirmação/acompanhamento (usa cuid, não orderNumber, na URL)
-    admin/
-      login/page.tsx         — só campo de senha (ver §7)
-      (protected)/layout.tsx — sidebar, valida sessão (defensivo; proxy já protege)
-        dashboard/page.tsx   — Kanban + stats do dia
-        produtos/page.tsx    — CRUD completo (nome, categoria, preço, foto, descrição,
-                               ingredientes, adicionais, ativo/inativo) + tabela de campos
-                               fiscais logo abaixo (ProductFiscalTable, inalterada)
-        categorias/page.tsx  — CRUD (criar, renomear, ativar/desativar, excluir se vazia)
-        configuracoes/page.tsx — nome, cores, aberto/fechado, taxa entrega, largura bobina
-        fiscal/page.tsx       — config da empresa + certificado A1 + ambiente
-      comanda/[id]/page.tsx   — comanda de impressão (fora do layout com sidebar)
-    api/
-      auth/login, auth/logout, auth/change-password — POST (admin, troca a própria senha)
-      orders/                — POST (público), GET (admin)
-      orders/[id]/status      — PATCH (admin)
-      orders/[id]/print       — POST (admin, marca impresso)
-      orders/[id]/fiscal/issue — POST (admin, emite NFC-e)
-      orders/[id]/fiscal/pdf   — GET (admin, proxy autenticado do DANFCE)
-      products/                — POST (admin, cria produto + adicionais)
-      products/[id]             — PATCH (admin, edita produto + substitui adicionais), DELETE
-                                   (admin, só se nunca usado em pedido — RESTRICT na FK)
-      products/[id]/fiscal     — PATCH (admin, edita NCM/CFOP/CSOSN/unidade)
-      products/upload-image     — POST multipart (admin, salva foto em public/uploads/products,
-                                   retorna a URL pública)
-      categories/               — POST (admin, cria categoria)
-      categories/[id]            — PATCH (admin, renomeia/ativa-desativa; aceita `order`
-                                   também, mas ainda não há UI de reordenação), DELETE
-                                   (admin, só se não tiver produtos — RESTRICT na FK)
-      delivery-zones/            — POST (admin, cria bairro)
-      delivery-zones/[id]         — PATCH (admin, renomeia/muda taxa/ativa-desativa), DELETE
-                                   (admin, só se não tiver pedidos — RESTRICT na FK)
-      settings/                — PATCH (admin)
-      admin/fiscal/config       — GET/PUT (config fiscal)
-      admin/fiscal/certificado  — POST multipart (upload .pfx + senha)
-      admin/fiscal/registrar-empresa — POST (cadastra empresa no provider)
-
-  components/
-    ui/          — Button, Input, Textarea, Select, Modal, Badge (reutilizáveis, sem lógica de negócio)
-    site/        — header, footer, category-nav, product-card/modal, cart-drawer, menu-browser, checkout-form
-    admin/       — sidebar, kanban-board, order-card, fiscal-action, fiscal-config-form,
-                   fiscal-certificate-card, product-fiscal-table, product-manager (CRUD de
-                   produtos + adicionais), category-manager (CRUD de categorias),
-                   delivery-zone-manager (CRUD de bairros/taxa, dentro de /admin/configuracoes),
-                   settings-form, change-password-form (seção Segurança em /admin/configuracoes),
-                   today-stats, login-form
-    print/       — comanda.tsx (conteúdo puro da comanda) + print-controller.tsx (dispara window.print())
-
-  lib/
-    prisma.ts           — singleton do PrismaClient
-    auth.ts             — hash/verify (bcrypt), sessão JWT (jose), cookie httpOnly
-    crypto.ts            — AES-256-GCM p/ criptografar client_secret fiscal (FISCAL_ENCRYPTION_KEY)
-    rate-limit.ts         — limitador de tentativas de login (em memória, ver §7)
-    money.ts              — formatCentsToBRL / reaisToCents (parser tolerante a "5.00" e "5,00")
-    format.ts              — formatOrderNumber ("#001"), formatRelativeTime ("há 5 minutos"),
-                              slugify (usado por seed.ts e pelos services de categoria/produto —
-                              única fonte da verdade, antes duplicado só no seed)
-    opening-hours.ts         — isStoreOpenNow (pausa manual + horário por dia da semana),
-                              parseWeeklySchedule/defaultWeeklySchedule, WEEKDAYS/WEEKDAY_LABELS
-    constants.ts            — TODAS as listas de valores válidos (status, pagamento, fiscal...)
-    notification-sound.ts    — beep via Web Audio API (sem depender de arquivo .mp3)
-    types.ts                  — tipos client-side de Category/Product (view models)
-    validations/               — Zod: auth, order, settings, fiscal, category, product, delivery-zone
-    services/                   — order-service, settings-service, fiscal-config-service,
-                                  fiscal-service, category-service, product-service, upload-service
-                                  (salva/apaga fotos de produto em public/uploads/products),
-                                  admin-service (changePassword — exige senha atual correta),
-                                  delivery-zone-service (CRUD de bairros, mesmo padrão de
-                                  category-service — RESTRICT + active em vez de hard delete)
-    fiscal/
-      fiscal-provider.interface.ts  — contrato FiscalProvider (issue, name)
-      index.ts                       — factory getFiscalProvider() (lê FiscalConfig do banco)
-      providers/pending-provider.ts   — no-op, explica o que falta configurar
-      providers/nuvem-fiscal-provider.ts — adapter real (OAuth2, empresas, certificado, NFC-e)
-
-  store/
-    cart-store.ts  — Zustand, persist só `items` (isOpen não é persistido)
+```
+api/
+├── admin/pagbank/config/route.ts          GET/PUT   (sessão admin)
+├── admin/pagbank/testar-conexao/route.ts  POST      (sessão admin)
+├── auth/login/route.ts                    POST      (público, rate-limited)
+├── auth/logout/route.ts                   POST      (sessão admin)
+├── auth/change-password/route.ts          POST      (sessão admin)
+├── categories/route.ts, [id]/route.ts     CRUD      (sessão admin)
+├── client/auth/login/route.ts             POST      (público, rate-limited)
+├── client/auth/logout/route.ts            POST
+├── client/auth/change-password/route.ts   POST      (sessão cliente B2B)
+├── client/profile/route.ts                GET/PUT   (sessão cliente B2B)
+├── delivery-zones/route.ts, [id]/route.ts CRUD      (sessão admin)
+├── health/route.ts                        GET       (público)
+├── orders/route.ts                        POST público (rate-limited) / GET admin
+├── orders/[id]/status/route.ts            PATCH     (sessão admin) — dispara fiscal automática
+├── orders/[id]/print/route.ts             POST      (sessão admin)
+├── orders/[id]/pix/route.ts               GET       (público — cria/consulta cobrança Pix)
+├── orders/[id]/fiscal/issue/route.ts      POST      (sessão admin) — emissão manual
+├── orders/[id]/fiscal/pdf/route.ts        GET       (sessão admin) — baixa o DANFCE
+├── products/route.ts, [id]/route.ts       CRUD      (sessão admin)
+├── products/[id]/fiscal/route.ts          PUT       (sessão admin) — NCM/CFOP/CSOSN
+├── products/upload-image/route.ts         POST      (sessão admin)
+├── settings/route.ts                      GET/PUT   (sessão admin)
+└── webhooks/pagbank/route.ts              POST      (público, sem auth — ver §10)
 ```
 
 ---
 
 ## 4. Banco de dados
 
-**PostgreSQL** (trocado de SQLite em 2026-07-09 — ver §2 e §15 para o motivo e o diagnóstico
-completo do incidente de deploy). Continua trocável para MySQL mudando só `datasource` em
-`schema.prisma` (nenhum código de aplicação depende do provider especificamente — sem
-`$queryRaw`/`$executeRaw`).
-
-### Migrations aplicadas (em ordem)
-1. `20260707160000_init_postgresql` — schema completo atual (todas as tabelas), gerado do
-   zero para Postgres. **Substitui as 6 migrations antigas em sintaxe SQLite** (`init`,
-   `update_default_brand_colors`, `delivery_type_and_cash_change`,
-   `fiscal_nfce_integration`, `accepted_payment_methods`, `delivery_zones`) — histórico
-   reiniciado de propósito (ver §2), o schema final é o mesmo de antes da troca de banco.
+PostgreSQL. Provider único (`postgresql`), sem uso de enums nativos — todo campo de
+"status"/"tipo" é `String` com os valores válidos documentados em comentário no schema
+(escolha deliberada — ver §20). Valores monetários sempre em **centavos** (`Int`).
 
 ### Models e relações
 
 ```
-Admin 1───N OrderStatusHistory
-Category 1───N Product
-Product 1───N ProductAddon
-Product 1───N OrderItem
-Customer 1───N Order
-DeliveryZone 1───N Order
-Order 1───N OrderItem
-Order 1───N OrderStatusHistory
-Order 1───1 Fiscal
-OrderItem 1───N OrderItemAddon
-ProductAddon 1───N OrderItemAddon (opcional — addon pode ter sido removido do produto)
-Settings — singleton (id="default")
-FiscalConfig — singleton (id="default")
+Admin ──< OrderStatusHistory (changedBy)
+
+Cliente (empresa B2B) ──< ClienteUsuario
+
+Category ──< Product ──< ProductAddon
+                     └──< OrderItem (via productId, sem cascade)
+
+Customer (consumidor final) ──< Order
+
+DeliveryZone ──< Order (Restrict on delete)
+
+Order ──< OrderItem ──< OrderItemAddon
+Order ──< OrderStatusHistory
+Order ── 1:1 ── Fiscal
+Order ── 1:1 ── PixCharge
+
+Settings          (singleton, id fixo "default")
+FiscalConfig       (singleton, id fixo "default")
+PagBankConfig      (singleton, id fixo "default")
 ```
 
-**Admin** — `id, name, email (unique), passwordHash, role (owner|staff), active, createdAt`.
-Hoje só existe um admin; login autentica contra `findFirst({ active: true })` (ver §7).
-
-**Category** — `id, name, slug (unique), order, active`. 7 categorias hoje: Lanches,
-Pastéis, Pastéis de Brócolis, Pastéis Doces, Açaí, Fritas, Bebidas.
-
-**Product** — `id, categoryId, name, slug (unique, prefixado por categoria — ex:
-"lanches-calabresa" vs "pasteis-calabresa" — necessário porque vários pratos repetem nome
-entre categorias), description, ingredients, priceCents, imageUrl, active, order`.
-Campos fiscais (todos opcionais até o admin preencher): `ncm, cfop, csosnCst,
-unidadeComercial (default "UN")`. **106 produtos** cadastrados hoje via seed.
-
-**ProductAddon** — `id, productId, name, priceCents, active`. Adicionais são por produto
-(não há grupo compartilhado no schema — o seed usa arrays JS reutilizados, tipo
-`LANCHE_ADDONS`, mas cada produto tem sua própria cópia das linhas no banco).
-
-**Customer** — `id, name, phone (unique), address (opcional — retirada não precisa),
-addressNumber, neighborhood, complement, reference`. Upsert por telefone a cada pedido —
-`neighborhood` é preenchido a partir do `DeliveryZone` escolhido (nunca texto livre do
-cliente, ver §8), mas **não é um snapshot por pedido**: como o Customer é uma linha
-reaproveitada por telefone, um pedido novo do mesmo cliente sobrescreve o campo (mesma
-característica pré-existente de `address`/`addressNumber` — nada novo introduzido aqui).
-
-**DeliveryZone** — `id, neighborhood (unique), feeCents, active, order`. Um bairro
-atendido pela entrega, com sua própria taxa. Exclusão só permitida se nenhum pedido
-referenciar o bairro (FK `orders.deliveryZoneId` é `RESTRICT`, mesmo padrão de
-Category/Product) — do contrário, use `active` para tirar do checkout sem perder
-histórico.
-
-**Order** — campos principais: `orderNumber (Int, sequencial, gerado via
-Settings.lastOrderNumber incrementado em transação)`, `status`, `deliveryType
-(entrega|retirada)`, `paymentMethod (pix|dinheiro|cartao_credito|cartao_debito` — ver §8),
-`cashChangeForCents` (só dinheiro — valor com que o cliente vai pagar, para calcular troco),
-`deliveryZoneId` (bairro escolhido, só entrega — nulo em retirada), `itemsTotalCents,
-deliveryFeeCents` (**snapshot** da taxa do bairro no momento do pedido — nunca recalculado
-se a taxa do `DeliveryZone` mudar depois, mesmo espírito de `OrderItem.unitPriceCents`),
-`totalCents, notes, printedAt`.
-
-**OrderItem / OrderItemAddon** — **snapshot** do nome e preço no momento da compra
-(mudar preço de um produto depois não afeta pedidos antigos).
-
-**OrderStatusHistory** — auditoria de cada mudança de status (quem mudou, quando).
-
-**Settings** (singleton) — nome/logo/cores da loja, WhatsApp, endereço, `storeOpen` (pausa
-manual), `openingHours` (JSON com o horário de funcionamento por dia da semana — ver §8),
-`acceptedPaymentMethods` (JSON array com as formas de pagamento aceitas — ver §8), pedido
-mínimo, largura da bobina (58mm/80mm), `lastOrderNumber`. **`deliveryFeeCents` continua na
-coluna do banco mas não é mais lido/gravado pela aplicação** — a taxa de entrega agora é
-por bairro (`DeliveryZone`, ver §8), mesmo tipo de campo vestigial que `logoUrl` (existe,
-mas sem fluxo que o use hoje).
-
-**Fiscal** (1-1 com Order, criado automaticamente em TODO pedido) — `customerDocument
-(CPF/CNPJ opcional), status (aguardando_emissao|emitida|erro), provider, ambiente,
-externalId, numero, serie, chaveAcesso, pdfUrl, xmlUrl, xmlContent, errorMessage,
-issuedAt`.
-
-**FiscalConfig** (singleton) — provider ativo, ambiente, credenciais (client_secret
-**criptografado** com AES-256-GCM via `FISCAL_ENCRYPTION_KEY`, nunca em texto puro), dados
-cadastrais da empresa (CNPJ, razão social, IE, IM, regime tributário, endereço completo),
-timestamps de quando a empresa foi registrada no provider e quando o certificado foi
-enviado. **O arquivo .pfx e a senha do certificado nunca são persistidos** — são enviados
-direto pro provider no momento do upload e descartados da memória do processo.
-
----
-
-## 5. Variáveis de ambiente
-
-Arquivo `.env` (não commitado; `.env.example` tem os placeholders):
-
-| Variável | Obrigatória | Descrição |
+| Model | Papel | Observações-chave |
 |---|---|---|
-| `DATABASE_URL` | sim | URL de conexão **PostgreSQL** (`postgresql://usuario:senha@host:5432/banco?sslmode=require`) — precisa estar configurada tanto localmente (`.env`) quanto na Vercel (Project Settings → Environment Variables), **para todos os ambientes** (Production/Preview/Development) |
-| `JWT_SECRET` | sim | assina o cookie de sessão do admin — string aleatória ≥32 chars |
-| `FISCAL_ENCRYPTION_KEY` | sim (se for usar fiscal) | criptografa `client_secret` da API fiscal no banco |
-| `SEED_ADMIN_EMAIL` | não | default `admin@rutelanches.com.br` (usado só internamente, não aparece no login) |
-| `SEED_ADMIN_PASSWORD` | não | default **`12345`** — **senha de teste, trocar antes de produção** |
+| `Admin` | usuário do painel | login só com senha (sem e-mail digitado — busca o primeiro admin ativo) |
+| `Cliente` / `ClienteUsuario` | empresas assinantes do portal B2B | **não é o consumidor final** — ver §8 |
+| `Category` / `Product` / `ProductAddon` | cardápio | `Product` tem `ncm`/`cfop`/`csosnCst`/`unidadeComercial` opcionais (fiscal) |
+| `Customer` | consumidor final (quem faz o pedido) | `phone` é `@unique` — usado como chave de upsert |
+| `DeliveryZone` | bairro + taxa de entrega | só usado quando `deliveryType = "entrega"` |
+| `Order` | pedido | `status` (kanban), `paymentStatus` (Pix), `deliveryType`, `wantsInvoice`, `paymentMethod` |
+| `OrderItem` / `OrderItemAddon` | itens do pedido | snapshot de nome/preço no momento da compra |
+| `OrderStatusHistory` | auditoria de mudança de status | |
+| `Settings` | configuração da loja | cores, horário, forma de pagamento aceita, etc. |
+| `Fiscal` | NFC-e de um pedido | 1:1 com `Order`, criado junto (`aguardando_emissao`) |
+| `FiscalConfig` | dados cadastrais da empresa emitente | **não** guarda mais credenciais (ver §11/§20) |
+| `PagBankConfig` | credenciais do PagBank | client_id/secret/token **criptografados** no banco |
+| `PixCharge` | cobrança Pix de um pedido | 1:1 com `Order`, criada sob demanda |
 
-Gerar segredos: `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`
+### Campos de "status" (strings, não enum nativo)
 
-**Este projeto não usa NextAuth** (autenticação é JWT próprio via `jose`, ver §6) — não
-existem nem são necessárias `NEXTAUTH_SECRET`/`NEXTAUTH_URL`.
+- `Order.status`: `"recebido" | "preparando" | "saiu_entrega" | "entregue" | "cancelado"`
+- `Order.deliveryType`: `"entrega" | "retirada" | "balcao"`
+- `Order.paymentMethod`: `"pix" | "dinheiro" | "cartao_credito" | "cartao_debito"`
+- `Order.paymentStatus`: `"pendente" | "pago" | "erro"`
+- `Fiscal.status`: `"aguardando_emissao" | "emitindo" | "emitida" | "erro"`
+- `PixCharge.status`: `"aguardando_pagamento" | "pago" | "expirado" | "erro"`
+
+### Índices e constraints relevantes
+
+- `@@index([status])`, `@@index([createdAt])`, `@@index([customerId])`,
+  `@@index([deliveryZoneId])` em `Order`.
+- `@@index([productId])` em `OrderItem`.
+- `@@index([externalId])` em `PixCharge` (consultado a cada webhook do PagBank).
+- `Customer.phone`, `Order.orderNumber`, `Cliente.cnpj/email`, `Admin.email`,
+  `DeliveryZone.neighborhood` — todos `@unique`.
+- `onDelete: Cascade` em tudo que é "filho" de `Order`/`Product`/`Cliente`.
+- `onDelete: Restrict` em `Order.deliveryZone` (não deixa apagar bairro com pedido).
+
+### Migrations (ordem cronológica)
+
+| Migration | O que fez |
+|---|---|
+| `20260707160000_init_postgresql` | schema inicial completo em Postgres (troca do SQLite — ver §12 do histórico/§20) |
+| `20260714120000_add_client_portal` | `Cliente` + `ClienteUsuario` (portal B2B) |
+| `20260714130000_add_cnae` | CNAE em `FiscalConfig`/`Cliente` |
+| `20260714140000_add_payments_and_pagbank` | `Order.paymentStatus`/`wantsInvoice`, `PagBankConfig`, `PixCharge` |
+| `20260714150000_add_pix_charge_external_id_index` | índice em `PixCharge.externalId` |
+| `20260714160000_fiscal_config_env_based_credentials` | remove `provider`/`ambiente`/`clientId`/`clientSecretEncrypted` de `FiscalConfig` (foram para env vars) |
+| `20260714170000_add_missing_fk_indexes` | índices que faltavam em FKs (`customerId`, `deliveryZoneId`, `productId`) |
+
+⚠️ **Nota histórica**: existe uma migration `20260703143145_init_postgres` registrada na
+tabela `_prisma_migrations` do banco de produção que **não tem pasta correspondente** no
+repositório (perdida antes desta sessão começar). Isso **não quebra nada** — `prisma
+migrate deploy`/`status` continuam funcionando normalmente, é só uma nota informativa que
+aparece no `migrate status`. Não tente "consertar" isso reescrevendo o histórico de
+migrations — é arriscado e sem benefício real.
+
+**Rodar migrations**: `npx prisma migrate deploy` (produção) — nunca `migrate dev` fora
+de máquina local de desenvolvimento.
 
 ---
 
-## 6. Autenticação e segurança
+## 5. Fluxo de autenticação
 
-- **Login do admin**: só senha (sem e-mail no formulário — decisão explícita do cliente
-  para simplificar testes). A API (`POST /api/auth/login`) autentica contra o primeiro
-  admin ativo (`findFirst({ active: true }, orderBy: createdAt asc)`). Isso significa que
-  **hoje o sistema assume um único administrador**; se precisar de múltiplos admins com
-  senhas diferentes, vai precisar reintroduzir um identificador (e-mail ou usuário) no
-  formulário e na query.
-- **Sessão**: JWT assinado (HS256) em cookie httpOnly, `sameSite=lax`, `secure` em produção,
-  7 dias de validade. Payload: `{ sub, email, name, role }`.
-- **Rate limit de login**: em memória (`src/lib/rate-limit.ts`), 5 tentativas por 15 min por
-  `IP:login`, bloqueio de 15 min ao estourar. **Limitação conhecida**: não sobrevive a
-  restart do processo nem funciona em múltiplas instâncias — para isso, trocar por um
-  store compartilhado (Redis) mantendo a mesma interface (`checkLoginRateLimit`,
-  `registerFailedLoginAttempt`, `clearLoginAttempts`).
-- **Troca de senha** (`ChangePasswordForm` em `/admin/configuracoes`, seção "Segurança"):
-  `POST /api/auth/change-password` (`src/lib/services/admin-service.ts::changePassword`) —
-  exige a senha atual correta (`verifyPassword` contra `Admin.passwordHash`) antes de gravar
-  a nova (`hashPassword`, mesmo bcrypt do login). Nova senha exige mínimo de 6 caracteres
-  (`changePasswordSchema` em `validations/auth.ts`). Não reintroduz nenhum campo novo no
-  schema — só atualiza `passwordHash` do admin da sessão atual (`session.sub`), compatível
-  com o modelo de admin único já existente. **A senha de teste `12345` (seed) ainda é o
-  default de instalação — trocar pelo próprio painel antes de expor a aplicação
-  publicamente.**
-- **Proteção de rotas**: `src/proxy.ts` redireciona qualquer `/admin/*` (exceto
-  `/admin/login`) sem cookie válido para o login. Todas as API routes sensíveis chamam
-  `getSession()` de novo internamente (defesa em profundidade).
-- **SEO**: `robots.ts` bloqueia `/admin` para crawlers; páginas admin têm
-  `metadata.robots = { index: false, follow: false }`.
-- **Validação**: toda entrada de API passa por `safeParse` do Zod antes de tocar o banco.
+Dois sistemas de sessão **completamente separados**, cada um com seu próprio cookie e
+suas próprias funções, mas **compartilhando o mesmo `JWT_SECRET`**:
+
+| | Admin (loja) | Cliente B2B |
+|---|---|---|
+| Cookie | `rl_session` | `rl_client_session` |
+| Módulo | `src/lib/auth.ts` | `src/lib/client-auth.ts` |
+| Login | só senha (busca 1º admin ativo) | e-mail + senha |
+| Rota de login | `/admin/login` | `/cliente/login` |
+| Rate limit | sim (`src/lib/rate-limit.ts`, 5 tentativas / 15 min) | sim (mesmo limitador, chave separada) |
+| Middleware | `src/proxy.ts` protege `/admin/:path*` | `src/proxy.ts` protege `/cliente/:path*` |
+
+- JWT assinado com `HS256` via `jose`, verificado (não só decodificado) em toda checagem
+  de sessão. Duração 7 dias.
+- Cookies: `httpOnly`, `secure` (só em produção), `sameSite: "lax"`.
+- `JWT_SECRET` precisa ter **≥32 caracteres** (checado em runtime, lança erro se menor).
+- Rotas de API fazem sua própria checagem via `getSession()`/`getClientSession()` — o
+  middleware só protege as **páginas** (renderização), não as API routes (necessário
+  porque algumas, como `POST /api/orders`, são públicas por design).
+- Senha com bcrypt, custo 12.
+- Login do cliente B2B usa um hash-dummy pra comparar mesmo quando o e-mail não existe
+  (evita vazar por timing se a conta existe ou não).
 
 ---
 
-## 7. Módulo fiscal (NFC-e via Nuvem Fiscal)
-
-**Importante: esta é uma integração real, não simulada.** Foi testada contra a API de
-produção da Nuvem Fiscal (com credenciais fictícias, retornando erro real `invalid_client`
-— confirma que a chamada HTTP está correta).
-
-**Atualizado em 2026-07-14: a tela `/admin/fiscal` foi removida.** Provider, ambiente e
-credenciais da Nuvem Fiscal agora vêm de variáveis de ambiente, e o certificado A1 vem de
-um arquivo local no servidor (instalado manualmente na implantação) em vez de upload pelo
-painel — ver §7.1 abaixo. `FiscalConfig` (banco) guarda só os dados cadastrais da empresa
-emitente (CNPJ, razão social, endereço, CNAE) e o status do certificado/cadastro.
-
-### Arquitetura
-- `FiscalProvider` (interface) — `issue(input): Promise<FiscalIssueResult>`. Qualquer
-  provider futuro (Focus NFe, PlugNotas) só precisa implementar essa interface.
-- `getFiscalProvider()` (`src/lib/fiscal/index.ts`) — factory **assíncrona**. Provider/
-  ambiente/credenciais vêm de `getFiscalEnvConfig()` (`src/lib/fiscal/env-config.ts`,
-  variáveis de ambiente); CNPJ/regime tributário vêm de `FiscalConfig` (banco); o
-  certificado é validado a cada chamada (`validateLocalFiscalCertificate`, ver §7.1).
-  Decide entre `PendingProvider` (com motivo específico do que falta) ou
-  `NuvemFiscalProvider` (se tudo configurado e o certificado válido).
-- `NuvemFiscalProvider` — OAuth2 client_credentials (token cacheado em memória por
-  `client_id`), `POST /empresas` (cadastro, com fallback para `PUT` se já existir), `PUT
-  /empresas/{cnpj}/certificado` (upload do .pfx em base64), `POST /nfce` (emissão),
-  `GET /nfce/{id}/xml` e `/pdf` (download autenticado). **Nada disso mudou** — só a fonte
-  do certificado e das credenciais mudou (ver §7.1).
-
-### 7.1. Certificado A1 — arquivo local, sem upload pelo painel (2026-07-14)
-
-O certificado A1 (.pfx/.p12) **não fica no Git nem é enviado por upload no painel**. Ele é
-instalado manualmente no servidor durante a implantação do cliente:
-
-1. Copie o arquivo para `certs/` na raiz do projeto no servidor (pasta gitignored — ver
-   `certs/README.md`), ex: `certs/certificado.pfx`.
-2. No `.env` do servidor, defina:
-   ```
-   FISCAL_PROVIDER="nuvem_fiscal"
-   FISCAL_AMBIENTE="homologacao"   # ou "producao"
-   NUVEM_FISCAL_CLIENT_ID="..."
-   NUVEM_FISCAL_CLIENT_SECRET="..."
-   FISCAL_CERTIFICADO_PATH="./certs/certificado.pfx"
-   FISCAL_CERTIFICADO_SENHA="..."
-   ```
-3. Reinicie a aplicação (`npm start`/restart do processo).
-
-Na inicialização (`src/instrumentation.ts` → `ensureFiscalCertificateUploaded()` em
-`src/lib/services/fiscal-certificate-service.ts`):
-- valida que o arquivo existe, que a senha abre o `.pfx` (via `node-forge`) e que o
-  certificado não está vencido — loga um erro amigável (`console.warn`) se algo estiver
-  errado, sem derrubar a aplicação;
-- se estiver tudo certo e ainda não tiver sido enviado (ou o certificado mudou desde o
-  último envio — comparado por `FiscalConfig.certificadoValidoAte`), cadastra a empresa
-  (`registerCompanyWithProvider`) e envia o certificado (`uploadCertificate`) para a Nuvem
-  Fiscal automaticamente, gravando `empresaRegistradaEm`/`certificadoEnviadoEm` no banco.
-
-`getFiscalProvider()` também revalida o certificado local a cada emissão (não só no boot) —
-se o arquivo sumir ou vencer depois que a aplicação já estiver rodando, a emissão falha com
-um erro amigável em vez de tentar usar um certificado inválido.
-
-**Requer disco persistente** (VPS) — não funciona na Vercel, cujo sistema de arquivos é
-efêmero (mesmo problema já documentado em §15). O deploy de produção deste módulo pressupõe
-migração para um servidor com filesystem persistente.
-
-### Fluxo de emissão
-
-Disparado de duas formas (ambas chamam a mesma função):
-1. **Manual**: admin clica "Emitir NFC-e" no pedido.
-2. **Automático**: pedido muda de "Preparando" para "Saiu para entrega/retirada" e o cliente
-   marcou "quero nota fiscal" no checkout (`Order.wantsInvoice`) — ver
-   `src/app/api/orders/[id]/status/route.ts`.
+## 6. Fluxo de pedidos
 
 ```
-issueFiscalDocumentForOrder(orderId)  [src/lib/services/fiscal-service.ts]
-  ↓
-Bloqueia se já está "emitida"
-  ↓
-Reivindica a linha atomicamente (status → "emitindo") — evita que o disparo manual e o
-  automático emitam duas notas para o mesmo pedido se rodarem ao mesmo tempo
-  ↓
-Valida que TODOS os produtos do pedido têm ncm+cfop+csosnCst preenchidos
-  (senão: erro claro listando quais produtos faltam, e libera a reivindicação)
-  ↓
-Monta payload NFCe padrão SEFAZ (ide, dest, det[], imposto.ICMS, pag[])
-  ↓
-provider.issue() → grava status/numero/serie/chaveAcesso/xml/pdf na tabela Fiscal
+Cliente final navega o cardápio (/) → adiciona itens ao carrinho (zustand + localStorage,
+chave "rl-cart") → /checkout → preenche dados → POST /api/orders
+   ↓
+createOrder() [src/lib/services/order-service.ts]
+  - valida loja aberta (Settings + horário de funcionamento)
+  - valida forma de pagamento aceita
+  - recalcula preços/adicionais a partir do banco (nunca confia no valor do cliente)
+  - upsert de Customer por telefone
+  - transação: incrementa Settings.lastOrderNumber (row-lock do Postgres evita
+    número duplicado em pedidos concorrentes) + cria Order + OrderItems + Fiscal
+    (status "aguardando_emissao")
+   ↓
+Cliente é redirecionado pra /pedido/[id] — mostra status, resumo, e (se Pix) o
+PixPaymentPanel gerando a cobrança automaticamente
+   ↓
+Pedido aparece no Kanban do admin (poll a cada 5s) em "Novo pedido"
+   ↓
+Admin avança o status pelo Kanban (PATCH /api/orders/[id]/status), com concorrência
+otimista: o Kanban manda o `previousStatus` esperado; se outro admin já mudou, a API
+responde 409 e o Kanban avisa + recarrega
+   ↓
+Transição "preparando" → "saiu_entrega": dispara automaticamente
+  1. emissão fiscal (se wantsInvoice) — ver §11
+  2. impressão automática (popup + window.print()) — ver §12
 ```
 
-### O que precisa ser configurado antes de emitir de verdade
-1. `.env` do servidor: `FISCAL_PROVIDER="nuvem_fiscal"`, `NUVEM_FISCAL_CLIENT_ID`/
-   `NUVEM_FISCAL_CLIENT_SECRET` reais, `FISCAL_AMBIENTE` (ver item 5).
-2. CNPJ/razão social/IE/regime tributário/endereço da empresa em `FiscalConfig` (já
-   seedado com os dados da Rute Lanches — ver `prisma/seed.ts`, `seedFiscalConfig`).
-3. Certificado A1 instalado em `certs/` no servidor + `FISCAL_CERTIFICADO_PATH`/
-   `FISCAL_CERTIFICADO_SENHA` no `.env` — ver §7.1. Cadastro da empresa e envio do
-   certificado para a Nuvem Fiscal acontecem sozinhos no boot da aplicação.
-4. `/admin/produtos` → preencher NCM/CFOP/CSOSN-CST/unidade de cada produto que vai ser
-   vendido com nota fiscal (106 produtos, nenhum tem isso preenchido ainda por padrão).
-5. Trocar `FISCAL_AMBIENTE` para `"producao"` só depois de validar em homologação.
-
-### ⚠️ Pontos que precisam de revisão por um contador antes de ir para produção
-- **CSOSN/CST por produto**: hoje é um campo livre preenchido manualmente por produto —
-  não há validação de que o código faz sentido para o regime tributário da empresa.
-- **PIS/COFINS**: o adapter usa uma simplificação fixa (CST 49, sem tributação destacada
-  por item) apropriada para Simples Nacional pagando via DAS. **Não é apropriada** para
-  regime normal sem revisão.
-- **Código do nó ICMS** (`ICMSSN{codigo}` vs `ICMS{codigo}`): construído
-  programaticamente a partir do CSOSN/CST cadastrado, seguindo a convenção padrão SEFAZ.
-  Testar em homologação para confirmar que a Nuvem Fiscal aceita exatamente esse formato.
-- ~~Forma de pagamento → tPag: `cartao` sempre mapeia para "03" (crédito) porque o checkout
-  não distingue crédito/débito~~ — **resolvido**: o checkout agora distingue `cartao_credito`
-  (tPag "03") de `cartao_debito` (tPag "04") — ver §8.
-- **Taxa de entrega**: mapeada para `vFrete` no total da nota (prática comum, mas
-  confirmar se é assim que a contabilidade do cliente quer registrar).
+`DeliveryType` tem 3 valores: `"entrega"` (com bairro/taxa), `"retirada"` (sem taxa) e
+`"balcao"` (venda presencial criada pelo admin — ver §7). Fiscalmente, `retirada` e
+`balcao` são tratados como `indPres: 1` (presencial); `entrega` como `indPres: 4`.
 
 ---
 
-## 8. Fluxo de pedidos — detalhes técnicos
+## 7. Fluxo da Venda no Balcão
 
-- **Controle operacional da loja** (`src/lib/opening-hours.ts`): a loja fica fechada por
-  dois motivos independentes, combinados em `isStoreOpenNow(settings)`:
-  1. **Pausa manual** — `Settings.storeOpen` (toggle "Status da loja" em
-     `/admin/configuracoes`). Se desligado, a loja fica fechada **na hora**, não importa o
-     horário configurado.
-  2. **Horário de funcionamento** — `Settings.openingHours`, um JSON por dia da semana
-     (`{ dom: { enabled, open, close }, seg: {...}, ... }`, chaves em `WEEKDAYS`). Se o
-     campo está em `"{}"` (nunca configurado — default de instalação), **não há restrição
-     de horário**, só a pausa manual vale — mantém compatibilidade com instalações
-     antigas que nunca mexeram nisso. Uma vez configurado, fora do horário do dia atual a
-     loja fica fechada mesmo com a pausa manual ligada (aberta). Suporta horário que passa
-     da meia-noite (ex: 18:00–02:00). O horário "agora" é calculado sempre no fuso
-     `America/Sao_Paulo` (`Intl.DateTimeFormat`), independente do TZ do servidor.
-  - `isStoreOpenNow()` é chamado em **três lugares**: `order-service.ts::createOrder`
-    (bloqueia a criação do pedido com `OrderServiceError("STORE_CLOSED")` → 409), e nos
-    Server Components `(site)/layout.tsx` e `(site)/checkout/page.tsx` (calculam o valor
-    uma vez e passam como prop `storeOpen` para `SiteHeader`, `CartDrawer` e
-    `CheckoutForm` — esses componentes em si não mudaram, só passaram a receber o valor
-    computado em vez do campo bruto do banco).
-  - **O cardápio (`(site)/page.tsx`) nunca verifica `storeOpen`** — pode ser sempre
-    navegado, fechado ou aberto; só a finalização do pedido é bloqueada (carrinho e
-    checkout mostram aviso e desabilitam o botão de finalizar).
-  - Editor do horário: card "Horário de funcionamento" dentro de `SettingsForm`
-    (`/admin/configuracoes`), um toggle + dois `<input type="time">` por dia. Salva junto
-    com o resto das configurações no mesmo `PATCH /api/settings` (o schema Zod
-    `weeklyScheduleSchema` valida a forma antes de virar `JSON.stringify(...)` para gravar
-    na coluna).
-- **Formas de pagamento aceitas** (`Settings.acceptedPaymentMethods`, controle puramente
-  operacional — **não é** integração de pagamento online, é só dizer quais opções a loja
-  aceita hoje):
-  - 4 valores possíveis em `PAYMENT_METHODS` (`constants.ts`): `pix`, `dinheiro`,
-    `cartao_credito`, `cartao_debito` (antes era um único `cartao` — a separação também
-    corrigiu o `tPag` da nota fiscal, ver §7).
-  - Card "Formas de pagamento aceitas" em `/admin/configuracoes` (dentro do mesmo
-    `SettingsForm`) — checkboxes, salva junto com o resto em `PATCH /api/settings`. Precisa
-    ficar com pelo menos 1 marcada (validado no client e via Zod,
-    `acceptedPaymentMethods: z.array(z.enum(PAYMENT_METHODS)).min(1)`).
-  - `parseAcceptedPaymentMethods()` (`constants.ts`) lê o JSON salvo; se estiver vazio ou
-    corrompido, assume **todas** as formas — nunca queremos derrubar o checkout por um dado
-    de configuração inválido (mesmo espírito de `parseWeeklySchedule`/`isStoreOpenNow`).
-  - `CheckoutForm` só lista as formas aceitas (`acceptedPaymentMethods` calculado em
-    `checkout/page.tsx` e passado como prop); `order-service.ts::createOrder` valida de novo
-    no servidor e rejeita com `OrderServiceError("PAYMENT_METHOD_DISABLED")` → 409 se o
-    cliente tentar forçar uma forma desativada direto na API (defesa em profundidade, mesmo
-    padrão do `STORE_CLOSED`).
-  - `getPaymentMethodLabel()` (`constants.ts`) é usado em vez de acessar
-    `PAYMENT_METHOD_LABELS[...]` direto em qualquer lugar que exibe a forma de pagamento
-    (Kanban, confirmação do pedido, comanda) — cai de volta pro valor bruto se for um pedido
-    antigo com uma forma que não existe mais (proteção, não deve acontecer na prática hoje).
-  - **A comanda impressa (`comanda.tsx`) agora mostra a forma de pagamento e o troco** (se
-    dinheiro) no rodapé — isso **muda uma decisão anterior** documentada aqui (a comanda era
-    propositalmente sem dados de pagamento); foi alterado a pedido explícito do cliente,
-    para quem entrega/recebe saber se precisa separar troco antes de sair. O resto da
-    comanda continua minimalista (sem cliente, sem total).
-- **Taxa de entrega por bairro** (`DeliveryZone`, controle puramente operacional — sem
-  integração de mapa/CEP):
-  - Admin cadastra bairros com nome + taxa em `/admin/configuracoes` (`DeliveryZoneManager`,
-    mesmo padrão de tabela+modal do `CategoryManager`). `active=false` tira o bairro do
-    checkout sem apagar pedidos que já o usaram; exclusão só é permitida com zero pedidos
-    (FK `RESTRICT`, ver §4).
-  - `CheckoutForm` recebe só os bairros ativos (`listActiveDeliveryZones()`, calculado em
-    `checkout/page.tsx`) — o campo "Bairro" virou um `<Select>` com a taxa de cada opção já
-    visível, **não é mais texto livre**. **Se não houver nenhum bairro ativo cadastrado, o
-    botão "Entrega" fica desabilitado e só resta "Retirada no local".**
-  - `order-service.ts::createOrder` recalcula tudo no servidor: busca o `DeliveryZone` pelo
-    `deliveryZoneId` recebido, confere que existe e está `active` (senão
-    `OrderServiceError("DELIVERY_ZONE_UNAVAILABLE")` → 409, mesmo padrão de `STORE_CLOSED`/
-    `PAYMENT_METHOD_DISABLED`) e usa `zone.feeCents` como `Order.deliveryFeeCents` — **nunca
-    confia em taxa vinda do client**. O nome do bairro (`zone.neighborhood`) também
-    sobrescreve o que o client mandou ao gravar `Customer.neighborhood`.
-  - **Mudar a taxa de um bairro depois não recalcula pedidos antigos** — `deliveryFeeCents`
-    já foi gravado no momento do pedido (testado manualmente: mudar a taxa de R$8 pra R$12
-    não alterou um pedido já criado com aquele bairro).
-  - Exibição usa a relação `order.deliveryZone` (incluída em `orderInclude`), não
-    `order.customer.neighborhood` — o nome do bairro daquele pedido específico fica correto
-    mesmo que o mesmo cliente faça outro pedido depois para um bairro diferente (Customer é
-    reaproveitado por telefone, então seu campo `neighborhood` isolado não seria confiável
-    para isso). Aparece no Kanban (`order-card.tsx`, "Taxa de entrega: R$ X,XX") e na comanda
-    impressa (`ENTREGA: {bairro}` + `Taxa: R$ X,XX`).
-- **Geração do número do pedido**: transação que incrementa `Settings.lastOrderNumber` e
-  usa o valor resultante — evita duas requisições simultâneas gerarem o mesmo número.
-- **Preços sempre recalculados no servidor** a partir do banco (nunca confia no preço que
-  o client mandou) — ver `order-service.ts::createOrder`.
-- **Entrega vs retirada**: `deliveryFeeCents` é zerado automaticamente se
-  `deliveryType === "retirada"` (nenhum `DeliveryZone` é buscado nesse caso); endereço não
-  é exigido nesse caso.
-- **Troco**: se `paymentMethod === "dinheiro"` e o cliente informa quanto vai pagar
-  (`cashChangeForCents`), o servidor valida que é `>= totalCents` antes de aceitar.
-- **Impressão da comanda**: dispara automaticamente só na transição
-  `recebido → preparando` (não em qualquer mudança de status). Abre
-  `/admin/comanda/[id]?autoprint=1` numa popup (`window.open`), que chama `window.print()`
-  após o conteúdo montar e fecha a janela sozinha depois (`afterprint`, só se
-  `window.opener` existir). Botão "Reimprimir" no card do pedido abre a mesma página sem
-  `autoprint`. A comanda é propositalmente **minimalista**: nome da loja, "PEDIDO #001",
-  itens com adicionais/observações em CAIXA ALTA e fonte grande, e — a pedido explícito do
-  cliente (ver bullets de pagamento e entrega acima) — forma de pagamento/troco e
-  bairro/taxa de entrega no rodapé. Continua **sem** dados do cliente (nome/telefone/
-  endereço) nem total geral (isso fica só no painel).
-- **Alerta sonoro**: beep gerado via Web Audio API (sem arquivo de áudio), repete a cada
-  8s enquanto houver pedido "recebido" não reconhecido; clicar em qualquer parte do card
-  marca como reconhecido (para de repetir só aquele pedido).
-- **Kanban só mostra**: pedidos de hoje + qualquer pedido ainda ativo (não
-  entregue/cancelado) independente da data — pedidos entregues/cancelados de dias
-  anteriores somem da lista (comportamento intencional, não bug).
+Tela em `/admin/nova-venda` (`src/components/admin/nova-venda-screen.tsx`), acessível
+pelo botão "Nova venda" no header do Kanban. **Reaproveita o mesmo `CheckoutForm`/
+`ProductModal`/`createOrder()` do site** — não é um sistema separado (decisão explícita
+do cliente, ver §20).
+
+```
+Funcionário busca produto por nome (busca nova, não existe no site) → ProductModal
+(mesmo do site) adiciona ao carrinho isolado (useBalcaoCartStore, chave "rl-balcao-cart",
+NÃO compartilha estado com o carrinho de um cliente navegando no mesmo navegador)
+   ↓
+CheckoutForm reaproveitado com props diferentes do site:
+  - deliveryTypeOptions=["balcao","retirada","entrega"] (site só mostra entrega/retirada)
+  - requireCustomerContact=false (nome/telefone opcionais)
+  - submitLabel="Finalizar venda"
+  - onOrderCreated (em vez de redirecionar pra /pedido/[id])
+   ↓
+Nome/telefone em branco → nome vira "Cliente Balcão", telefone vira um placeholder
+sintético (crypto.getRandomValues, ~19 dígitos — entropia suficiente pra não colidir
+entre vendas simultâneas; Customer.phone é @unique)
+   ↓
+POST /api/orders (mesmíssimo endpoint do site) → mesmíssimo pipeline de criação,
+Kanban, emissão fiscal automática e impressão automática do §6
+   ↓
+Se Pix: mostra o PixPaymentPanel inline na própria tela (pra exibir o QR no balcão)
+Se não-Pix: mostra "Venda registrada!" + botões "Nova venda" / "Ver pedidos"
+```
 
 ---
 
-## 9. Cardápio (seed)
+## 8. Fluxo do cliente (portal B2B)
 
-`prisma/seed.ts` é a fonte da verdade do cardápio hoje — **não existe CRUD de produtos no
-admin ainda** (só edição dos campos fiscais, ver §10). Rodar `npm run prisma:seed`:
+**Atenção ao nome ambíguo**: "cliente" aqui é o model `Cliente`/`ClienteUsuario` — uma
+**empresa que assina a plataforma** (ex: se este sistema virar um produto vendido pra
+várias lanchonetes), não o consumidor final que compra um lanche (esse é `Customer`).
 
-⚠️ **`seedCatalog()` APAGA e recria** `Category`, `Product`, `ProductAddon`,
-`OrderItem`, `OrderItemAddon` toda vez que roda. Ou seja, **rodar o seed de novo destrói
-o histórico de itens de pedidos existentes** (os pedidos em si e `Fiscal` sobrevivem, mas
-perdem a relação com os itens). Isso foi aceitável até agora porque o cardápio mudou
-várias vezes nesta sessão; **tomar cuidado ao rodar o seed em produção com pedidos reais**.
+```
+/cliente/login (e-mail + senha) → POST /api/client/auth/login
+   ↓
+Sessão própria (rl_client_session) → /cliente/painel (protegido pelo proxy.ts)
+   ↓
+client-dashboard.tsx: perfil da empresa (razão social, CNPJ, endereço, plano,
+status da assinatura), trocar senha (obriga troca no primeiro login via
+deveAlterarSenha)
+```
 
-Conteúdo atual (todos os preços conferidos contra os encartes reais do cliente):
-- **Lanches** (21) — dogs, X-burgers, queijo/misto quente, churrasco, americano.
-  Adicionais: só tempero/recheio (alface, bacon, cheddar, hambúrguer extra etc. — 15
-  itens). **Não** têm mais batata/bebida/açaí como adicional (foram removidos a pedido).
-- **Pastéis** (43) — salgados base + combinações numeradas (Carne 1-14, Queijo 1-5,
-  Frango 1-12, Calabresa 1-4). Adicionais: 17 itens (recheios extras + doces).
-- **Pastéis de Brócolis** (8)
-- **Pastéis Doces** (5) — sem adicionais.
-- **Açaí** (6 tamanhos) — adicionais próprios (creme de avelã, leite condensado, confeti, paçoca).
-- **Fritas** (4 — Simples/Completa × P/G) — sem adicionais.
-- **Bebidas** (19) — sem adicionais.
+`/cliente/esqueci-senha` é uma página estática que só orienta a entrar em contato por
+e-mail de suporte — **não existe fluxo automático de recuperação de senha** (ver §21).
 
-`WhatsApp` da loja em `Settings.whatsapp`: `(15) 99633-0266` (número real do cliente).
+Hoje só existe **um** cliente B2B seedado: Rute Lanches ela mesma (`prisma/seed.ts`,
+`seedClienteRuteLanches`) — o portal foi construído mas não está sendo usado por
+terceiros ainda.
 
 ---
 
-## 10. Funcionalidades prontas
+## 9. Fluxo do admin
 
-- [x] Site público: cardápio por categoria (scroll-spy), modal de produto com adicionais e
-  observação, carrinho (Zustand), checkout com entrega/retirada e troco, confirmação de pedido.
-- [x] Painel admin: login (só senha), Kanban de 5 colunas com polling, alerta sonoro
-  repetindo, stats do dia (pedidos/faturamento/ticket médio), configurações da loja.
-- [x] Impressão de comanda automática (58mm/80mm) + reimpressão manual.
-- [x] Módulo fiscal completo (config da empresa, certificado, emissão de NFC-e real via
-  Nuvem Fiscal, status aguardando/emitida/erro, download de DANFCE).
-- [x] Edição de campos fiscais por produto (tabela dedicada, complementar ao CRUD completo).
-- [x] Segurança básica: rate limit de login, robots/noindex no admin, Zod em todas as APIs.
-- [x] **CRUD completo de produtos** (`product-manager.tsx` + `product-service.ts`): criar,
-  editar nome/categoria/preço/foto/descrição/ingredientes/ativo, gerenciar adicionais
-  (adicionar/editar/remover) e excluir (bloqueado se o produto já foi usado em algum
-  pedido — FK `order_items.productId` é `RESTRICT`; nesse caso, desative em vez de excluir).
-- [x] **Upload de foto de produto** (`upload-service.ts` + `POST /api/products/upload-image`):
-  botão "Enviar/Trocar foto" no modal do produto, preview imediato, "Remover foto". Arquivo é
-  enviado via multipart (mesmo padrão do upload do certificado fiscal), salvo em
-  `public/uploads/products/<uuid>.<ext>` (nome gerado no servidor, nunca o nome original do
-  arquivo) e a URL pública é gravada em `Product.imageUrl` — nenhuma mudança de schema.
-  Só aceita JPG/PNG/WEBP, máx. 5MB. Ao trocar a foto, editar sem foto ou excluir o produto,
-  o arquivo antigo é apagado do disco automaticamente (best-effort, nunca falha o request).
-  `/public/uploads` está no `.gitignore` (conteúdo do usuário, não versionado). Não há
-  redimensionamento/otimização de imagem (sem `sharp` ou similar) — fica como está enviado.
-- [x] **CRUD de categorias** (`category-manager.tsx` + `category-service.ts`): criar,
-  renomear, ativar/desativar. Exclusão só é permitida se a categoria não tiver nenhum
-  produto (mesmo inativo) — FK `products.categoryId` é `RESTRICT`; do contrário, apenas
-  desative a categoria (ela some do site, mas os produtos continuam no banco).
-  Reordenação (drag-and-drop) não foi implementada — o campo `order` só é setado
-  automaticamente (categoria nova vai para o fim da lista).
-- [x] **Controle operacional da loja** (`opening-hours.ts`, ver §8 para detalhes): pausa
-  manual (já existia) + horário de funcionamento por dia da semana configurável em
-  `/admin/configuracoes`, bloqueio automático de pedidos fora do horário (mesma mensagem e
-  status 409 da pausa manual), aviso "Fechado no momento" no cardápio/carrinho/checkout, e
-  o cardápio continua **sempre navegável** mesmo com a loja fechada (só a finalização do
-  pedido é bloqueada). Sem restrição de horário configurada (`"{}"`, default), só a pausa
-  manual vale — compatível com o comportamento anterior a essa mudança.
-- [x] **Formas de pagamento aceitas** (`Settings.acceptedPaymentMethods`, ver §8): admin
-  escolhe quais das 4 formas (Pix, Dinheiro, Cartão de crédito, Cartão de débito) aceita;
-  checkout só mostra as ativas; servidor valida de novo (409 se tentar forçar uma
-  desativada); troco continua exclusivo do dinheiro; forma escolhida aparece no Kanban, na
-  confirmação do pedido e agora também na comanda impressa (com o troco, se dinheiro).
-  Puramente operacional — **sem** integração de pagamento online.
-- [x] **Taxa de entrega por bairro** (`DeliveryZone`, ver §8): admin cadastra bairros com
-  taxa própria em `/admin/configuracoes` (criar, editar, ativar/desativar, excluir se nunca
-  usado em pedido); checkout mostra um select só com bairros ativos (taxa já visível em
-  cada opção); total recalculado ao trocar de bairro; servidor sempre recalcula a taxa a
-  partir do banco (nunca confia no client) e bloqueia bairro inexistente/inativo (409);
-  sem nenhum bairro ativo cadastrado, só "Retirada no local" fica disponível. Taxa é
-  **snapshot** por pedido (mudar a taxa depois não altera pedidos já feitos — testado
-  manualmente). Aparece no Kanban e na comanda impressa. Sem integração de
-  mapa/CEP — só uma lista de bairros com taxa fixa, como pedido.
+```
+/admin/login (só senha) → sessão (rl_session) → /admin/dashboard (Kanban)
 
-## 11. Pendências / não implementado
+Sidebar (src/components/admin/sidebar.tsx):
+  Pedidos       → /admin/dashboard   (Kanban, TodayStatsBar, botão "Nova venda")
+  Produtos      → /admin/produtos    (CRUD produtos, fiscal por produto)
+  Categorias    → /admin/categorias  (CRUD categorias)
+  Configurações → /admin/configuracoes
+                    - SettingsForm (loja: nome, cores, horário, formas de pagamento)
+                    - PagBankConfigForm (credenciais Pix)
+                    - DeliveryZoneManager (bairros/taxas)
+                    - ChangePasswordForm
+```
 
-- [ ] **Reordenação de produtos/categorias** — o campo `order` existe e é respeitado na
-  exibição, mas não há UI de drag-and-drop para reordenar; hoje só increment automático.
-- [ ] **Relatórios** além do resumo simples do dia (sem gráficos, sem filtro por período).
-- [ ] **Multi-admin** de verdade (login hoje ignora e-mail/usuário, ver §6).
-- [ ] **Outros providers fiscais** (Focus NFe, PlugNotas) — a interface já suporta, só
-  falta implementar o adapter.
-- [ ] **Teste real da emissão de NFC-e** com certificado e credenciais verdadeiras (só foi
-  testado o "caminho do erro" com credenciais fictícias).
-- [ ] **Rate limit distribuído** (Redis) se for rodar em múltiplas instâncias.
-- [ ] Trocar a senha de teste `12345` antes de qualquer uso com clientes reais.
-
-## 12. Problemas conhecidos / gotchas do ambiente
-
-- **Windows + preview server**: o `preview_stop` do harness às vezes não mata a árvore de
-  processos do `next dev` no Windows (fica processo órfão ocupando a porta/travando o
-  Prisma Client durante `generate`). Se `prisma generate`/`migrate` falhar com `EPERM`
-  tentando renomear `query_engine-windows.dll.node`, encerrar os processos node do projeto
-  antes de tentar de novo:
-  ```powershell
-  Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Where-Object { $_.CommandLine -like '*rute-lanches*' } | Stop-Process -Force
-  ```
-- **Cliques via automação/preview às vezes não disparam** o handler React (parece
-  timing de hidratação do Next 16/Turbopack) — quando isso acontecer, um
-  `location.reload()` antes de repetir a ação geralmente resolve. Isso é uma flakiness da
-  ferramenta de preview usada durante o desenvolvimento, não um bug da aplicação (sempre
-  confirmado via chamada direta a `fetch()` que o endpoint funciona).
-- **`npm run build` local pode estourar memória** na etapa de type-check duplicado do
-  Next (`Running TypeScript...`), especialmente com pouca RAM livre na máquina — não
-  indica erro de código (rodar `npx tsc --noEmit` separado é a forma confiável de validar
-  tipos localmente). A Vercel roda o build com bem mais memória disponível.
-
-## 13. Próximos passos sugeridos
-
-Ordem combinada com o cliente em 2026-07-06/07 (prioriza o que a dona vai sentir no dia a
-dia; deixa o fiscal por último até validar com o contador):
-
-1. ~~Upload de imagem de produto~~ — feito (ver §10/§11).
-2. ~~Segurança: tela "alterar senha" no admin~~ — feito (ver §6). Ainda pendente, se
-   necessário mais pra frente: multi-admin de verdade (hoje o login ignora e-mail/usuário,
-   um único admin compartilha a mesma senha).
-3. ~~**Ajustes de uso real**~~ — **completo**:
-   - ~~Controle operacional da loja~~ (abrir/fechar manual + horário por dia da semana,
-     bloqueio automático de pedidos fora do horário, aviso no cardápio, cardápio sempre
-     navegável mesmo fechado) — feito (ver §8/§10).
-   - ~~Formas de pagamento aceitas~~ (admin escolhe quais das 4 formas aceita, checkout só
-     mostra as ativas, validação também no servidor) — feito (ver §8/§10).
-   - ~~Taxa de entrega por bairro~~ (`DeliveryZone`, admin cadastra bairros com taxa
-     própria, checkout mostra só os ativos, taxa é snapshot por pedido) — feito (ver §8/§10).
-4. **Fiscal** (por último, só depois de falar com o contador): testar emissão de NFC-e em
-   homologação com certificado e CNPJ reais da Rute Lanches; revisar CSOSN/PIS/COFINS.
-5. Relatórios com filtro de período (semana/mês) além do resumo do dia.
-6. Reordenação (drag-and-drop) de produtos/categorias/bairros no admin.
-7. Se o volume de pedidos crescer: trocar polling por WebSocket/SSE e rate limit em
-  memória por um store compartilhado.
+**Não existe mais tela "Fiscal"** no admin (removida nesta sessão — ver §11/§18/§20).
+Emissão de nota por pedido continua existindo via `FiscalAction`
+(`src/components/admin/fiscal-action.tsx`), dentro do card do pedido no Kanban.
 
 ---
 
-## 14. Como rodar
+## 10. Fluxo do PagBank (Pix)
 
-Precisa de um banco **PostgreSQL** primeiro (local via Docker, ou um serviço na nuvem —
-Vercel Postgres, Neon, Supabase — todos têm free tier e dão a `DATABASE_URL` pronta):
+### Configuração
+Feita pelo painel (`/admin/configuracoes` → bloco PagBank), **não por variável de
+ambiente** — client_id/secret/token ficam **criptografados** (AES-256-GCM,
+`src/lib/crypto.ts`, chave `FISCAL_ENCRYPTION_KEY`) na tabela `pagbank_config`. Botão
+"Testar conexão" faz uma chamada autenticada simples pra validar as credenciais.
+
+### Geração da cobrança
+
+```
+Pedido criado com paymentMethod="pix" → /pedido/[id] (ou tela Nova Venda) renderiza
+PixPaymentPanel → GET /api/orders/[id]/pix
+   ↓
+getOrCreatePixCharge() [src/lib/services/pagbank-service.ts]
+  - se já existe PixCharge pro pedido, retorna (idempotente — protegido contra
+    race condition com upsert-like try/catch em cima do unique constraint)
+  - senão: POST na API do PagBank (Orders API, qr_codes), salva
+    externalId/qrCodeText/qrCodeImageUrl
+   ↓
+PixPaymentPanel faz polling (5s) no mesmo endpoint até status="pago"
+```
+
+### Confirmação (webhook)
+
+```
+PagBank → POST /api/webhooks/pagbank (SEM autenticação de assinatura — ver §21)
+   ↓
+Extrai id/reference_id do corpo, acha o PixCharge correspondente
+   ↓
+NÃO confia no status do corpo — sempre reconfirma direto na API do PagBank
+(confirmPixChargePaid, server-to-server) antes de marcar como pago
+   ↓
+markPixChargePaid(): atualiza PixCharge.status="pago" + Order.paymentStatus="pago"
+  (usa updateMany com guard "status != pago"/"status != cancelado" — idempotente e
+  não reabre um pedido cancelado)
+   ↓
+Sempre responde 200 rapidamente (mesmo se não achar nada) — evita retry agressivo
+```
+
+Rate-limited (30 req/min por IP) como mitigação de abuso, já que não há verificação de
+assinatura (ver pendência em §21).
+
+---
+
+## 11. Fluxo da emissão fiscal (NFC-e)
+
+### Configuração (mudou bastante nesta sessão — ver §18/§20)
+
+- **Provider/ambiente/credenciais da Nuvem Fiscal**: variáveis de ambiente
+  (`FISCAL_PROVIDER`, `FISCAL_AMBIENTE`, `NUVEM_FISCAL_CLIENT_ID`,
+  `NUVEM_FISCAL_CLIENT_SECRET`) — **não tem mais tela no admin pra isso**.
+- **Dados cadastrais da empresa** (CNPJ, razão social, endereço, CNAE...): tabela
+  `FiscalConfig`, editados só via `prisma/seed.ts` (já preenchidos com os dados reais da
+  Rute Lanches).
+- **Certificado A1**: arquivo local no servidor (`certs/certificado.pfx`, fora do Git) +
+  senha (`FISCAL_CERTIFICADO_SENHA`). Instalado manualmente pelo cliente/operador na
+  implantação — **não tem upload pelo painel**.
+
+### Boot da aplicação (`src/instrumentation.ts`)
+
+```
+register() → ensureFiscalCertificateUploaded() [fiscal-certificate-service.ts]
+  1. valida o .pfx local (existe? senha correta? não vencido?) — node-forge
+  2. se válido e ainda não enviado: registra a empresa + envia o certificado
+     pra Nuvem Fiscal automaticamente (mesmos endpoints que antes eram acionados
+     por botão no admin)
+  3. loga erro amigável (console.warn/error) se algo estiver errado — nunca derruba
+     a aplicação
+```
+
+`getFiscalProvider()` (`src/lib/fiscal/index.ts`) revalida o certificado **a cada
+emissão** também (não só no boot) — se o certificado sumir/vencer depois que a app já
+está rodando, a emissão falha com erro amigável em vez de tentar usar algo inválido.
+
+### Emissão (`issueFiscalDocumentForOrder`, `src/lib/services/fiscal-service.ts`)
+
+Disparada de duas formas (mesma função):
+1. **Manual** — botão "Emitir NFC-e" no card do pedido.
+2. **Automática** — pedido muda pra "Saiu para entrega/retirada" **e** `wantsInvoice`
+   está marcado.
+
+```
+1. Bloqueia se já está "emitida"
+2. Reivindica a linha atomicamente (status → "emitindo") — evita que emissão manual
+   e automática rodando ao mesmo tempo gerem DUAS notas fiscais reais pro mesmo pedido
+3. Valida que todo item tem ncm/cfop/csosnCst preenchido no produto — senão libera
+   a reivindicação e lança erro listando os produtos incompletos
+4. Monta payload NFCe padrão SEFAZ e chama a Nuvem Fiscal
+5. Grava status/numero/serie/chaveAcesso/xml/pdf/erro na tabela Fiscal
+```
+
+⚠️ **Nenhum produto tem NCM/CFOP/CSOSN preenchido ainda** (ver §21) — a emissão vai
+falhar (graciosamente, com erro registrado) até isso ser preenchido em
+`/admin/produtos` para cada produto que for vendido com nota.
+
+---
+
+## 12. Fluxo da impressão
+
+**Não existe integração real com impressora de rede/térmica.** "Impressão automática"
+hoje é: popup do navegador + `window.print()` do sistema operacional.
+
+```
+Kanban (kanban-board.tsx) detecta a transição de status:
+  - "recebido" → "preparando": abre popup /admin/comanda/[id]?autoprint=1
+  - "preparando" → "saiu_entrega": idem
+   ↓
+print-controller.tsx (dentro do popup): faz POST /api/orders/[id]/print
+(marca printedAt), espera 350ms, chama window.print(), fecha o popup depois
+do evento afterprint
+```
+
+Requer que o painel Kanban esteja aberto numa aba do navegador do computador da loja, e
+que a impressora esteja configurada como padrão no sistema operacional (idealmente sem
+diálogo de confirmação, via configuração do driver/SO). **Construir impressão real via
+ESC/POS teria que ser um projeto à parte** (precisa saber modelo/conexão da impressora).
+
+---
+
+## 13. Configuração do VPS
+
+Dois caminhos de deploy documentados, ambos assumindo **Ubuntu 24.04** com disco
+persistente (⚠️ **não funciona na Vercel** — filesystem efêmero quebra tanto o
+certificado local quanto o SQLite antigo já quebrou no passado):
+
+1. **PM2 direto no servidor** — sem Docker. Node.js 20+, PostgreSQL e Nginx instalados
+   via `apt`.
+2. **Docker Compose** — app + postgres + nginx como containers.
+
+Ver §22 para o passo a passo completo do zero.
+
+---
+
+## 14. Docker, PM2, Nginx e PostgreSQL
+
+### `Dockerfile`
+Multi-stage (`base` → `deps` → `builder` → `runner`), tudo com a mesma imagem base
+(`node:20-slim`) pra garantir que o binário nativo do Prisma seja gerado pro SO certo.
+
+- `builder`: `npx prisma generate` + `npx next build` (com `output: "standalone"` no
+  `next.config.ts`). Usa uma `DATABASE_URL` **placeholder** só pra satisfazer a validação
+  — o build não abre conexão de verdade (nenhuma página estática depende do banco).
+- `runner`: copia `public/`, `.next/standalone`, `.next/static`, `prisma/`,
+  `prisma.config.ts` e **o `node_modules` completo do builder** (não só subpastas —
+  corrigido nesta sessão, ver §19: o CLI do Prisma precisa de dependências próprias tipo
+  `dotenv`/`c12`/`effect` que não estavam sendo copiadas).
+- `CMD`: `npx prisma migrate deploy && node server.js` — aplica migrations pendentes
+  toda vez que o container sobe, **antes** de servir tráfego.
+
+### `docker-compose.yml`
+Serviços: `postgres` (com healthcheck `pg_isready`), `app` (depende do postgres saudável,
+healthcheck via `GET /api/health`), `nginx` (depende do app saudável — corrigido nesta
+sessão, antes só esperava o processo existir). Volumes persistentes:
+`postgres_data` (nomeado), `./public/uploads`, `./certs`, `./logs` (bind mounts).
+
+### `ecosystem.config.js` (PM2)
+`script: "node_modules/next/dist/bin/next", args: "start"` (mais confiável que
+`pm2 start npm -- start`). `autorestart`, `max_restarts: 10`, `max_memory_restart: "512M"`,
+logs em `logs/pm2-out.log`/`logs/pm2-error.log`, `NODE_ENV=production`.
+
+### `nginx/default.conf`
+Reverse proxy `location / { proxy_pass http://app:3000; ... }`, endpoint pro desafio do
+certbot (`/.well-known/acme-challenge/`), bloco HTTPS **comentado** (descomentar depois
+de rodar o certbot), `client_max_body_size 15M` (upload de foto de produto).
+
+### PostgreSQL
+Em dev/staging atual: Neon (serverless Postgres). Em produção real: o container
+`postgres:16-alpine` do compose, ou um Postgres gerenciado externo (basta trocar
+`DATABASE_URL`).
+
+---
+
+## 15. Variáveis de ambiente
+
+Referência completa em **`.env.production.example`** (commitado, só placeholders). Lista
+do que é **realmente lido pelo código** (`process.env.*`):
+
+| Variável | Usada em | Obrigatória? |
+|---|---|---|
+| `DATABASE_URL` | Prisma (datasource) | sim |
+| `JWT_SECRET` | `auth.ts`, `client-auth.ts`, `proxy.ts` | sim, ≥32 chars |
+| `FISCAL_ENCRYPTION_KEY` | `crypto.ts` (criptografa segredos do PagBank no banco) | sim, ≥32 chars |
+| `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` | `prisma/seed.ts` | só no seed |
+| `FISCAL_PROVIDER` | `src/lib/fiscal/env-config.ts` | não (default `"pending"`) |
+| `FISCAL_AMBIENTE` | idem | não (default `"homologacao"`) |
+| `NUVEM_FISCAL_CLIENT_ID` / `NUVEM_FISCAL_CLIENT_SECRET` | idem | só se `FISCAL_PROVIDER="nuvem_fiscal"` |
+| `FISCAL_CERTIFICADO_PATH` / `FISCAL_CERTIFICADO_SENHA` | `fiscal-certificate-service.ts` | só se for emitir nota de verdade |
+| `APP_URL` | `pagbank-service.ts` (monta a notification_url do webhook) | recomendada em produção |
+| `NODE_ENV` | várias (cookie `secure`, etc.) | definida pelo ambiente (`production`) |
+| `PORT` | Next.js / PM2 / Docker | não (default 3000) |
+
+⚠️ **`PAGBANK_CLIENT_ID`/`PAGBANK_CLIENT_SECRET`/`PAGBANK_TOKEN`** aparecem no
+`.env.production.example` só por completude/documentação (o cliente pediu
+explicitamente) — **o código não lê essas variáveis hoje**. As credenciais do PagBank
+continuam vindo do painel admin, criptografadas no banco (tabela `pagbank_config`). Se um
+dia quiser migrar isso pra env vars (mesmo padrão do fiscal), é uma mudança de código à
+parte.
+
+`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` só são usadas pelo **container**
+`postgres` do `docker-compose.yml` (não pelo Next.js).
+
+---
+
+## 16. Scripts de deploy/update/backup/restore
+
+Todos em `scripts/`, POSIX shell, `set -euo pipefail`, sempre fazem `cd` pra raiz do
+projeto primeiro. **Precisam de `chmod +x scripts/*.sh` depois do `git clone`** (o bit
+executável não sobrevive a um `git` rodando no Windows).
+
+| Script | O que faz |
+|---|---|
+| `install.sh` | `npm ci` → `prisma generate` → `prisma migrate deploy` → `tsx prisma/seed.ts` → `next build` → `mkdir -p logs certs backups public/uploads` → `pm2 start ecosystem.config.js --env production` → `pm2 save` |
+| `update.sh` | `git pull` → `npm install` → `prisma generate && migrate deploy` → `next build` → `pm2 restart` |
+| `backup.sh` | `pg_dump $DATABASE_URL \| gzip` → `backups/rute-lanches_<timestamp>.sql.gz`, mantém os 14 mais recentes (ajustar `KEEP` conforme a rotina real). Pensado pra rodar via cron. |
+| `restore.sh` | Recebe o caminho do `.sql.gz`, **pede confirmação explícita** ("digite 'sim'") antes de sobrescrever o banco com `gunzip \| psql`. |
+
+`backup.sh`/`restore.sh` carregam `DATABASE_URL` do `.env` via `set -a; source .env; set +a`.
+
+---
+
+## 17. Tudo que já foi implementado
+
+- Cardápio público com categorias, busca por adicionais/observações/quantidade no modal
+  de produto.
+- Checkout do site (entrega com bairro/taxa, retirada, Pix/dinheiro/cartão, troco, opt-in
+  de nota fiscal com CPF/CNPJ).
+- Criação de pedido com recomputação de preço no servidor, numeração sequencial segura
+  contra concorrência.
+- Painel admin: Kanban com concorrência otimista, alerta sonoro de pedido novo, produtos,
+  categorias, bairros de entrega, configurações da loja, troca de senha.
+- **Venda no Balcão** (`/admin/nova-venda`) — reaproveitando checkout/carrinho do site.
+- Portal do cliente B2B (login, perfil, troca de senha obrigatória no primeiro acesso).
+- **PagBank**: configuração no admin, geração de cobrança Pix (QR + copia-e-cola),
+  confirmação via webhook com reverificação server-to-server, painel de pagamento
+  reaproveitado no site e na Venda no Balcão.
+- **Emissão fiscal NFC-e** via Nuvem Fiscal: manual e automática (no "saiu para
+  entrega/retirada"), com certificado A1 local validado automaticamente no boot.
+- Impressão automática via popup + `window.print()`.
+- Rate limiting em login admin/cliente, criação de pedido, geração de Pix, webhook.
+- Health check (`/api/health`).
+- Infraestrutura de deploy completa: Docker, PM2, Nginx, scripts de install/update/
+  backup/restore.
+
+---
+
+## 18. Tudo que foi alterado nesta sessão
+
+Esta conversa cobriu, em ordem, os seguintes grandes blocos de trabalho (cada um com
+commit próprio no `git log`):
+
+1. **Fix do login admin** quebrando com "Falha de conexão" — faltava try/catch ao redor
+   da criação do token de sessão; causa raiz era `JWT_SECRET` ausente/curto na Vercel.
+2. **Atualização do cadastro fiscal** com os dados oficiais reais da empresa (CNPJ, IE,
+   IM, endereço, CNAE) — `FiscalConfig`, `Cliente` e `Settings` sincronizados.
+3. **Auditoria completa de segurança/concorrência** (2 agentes em paralelo) — corrigiu:
+   race condition na emissão fiscal duplicada, race no `PixCharge`, falta de rate
+   limiting em várias rotas, timing leak no login do cliente, chaves JWT/criptografia
+   com mínimo de entropia baixo, validações de input incompletas, índice faltando.
+4. **Integração PagBank (Pix)** completa: config admin, geração/consulta de cobrança,
+   webhook com reconfirmação server-to-server, painel de pagamento no site.
+5. **Emissão fiscal automática** no "saiu para entrega" (antes só manual) + **impressão
+   automática** estendida pra essa mesma transição.
+6. **Remoção da tela "Fiscal" do admin** — certificado A1 passou a vir de arquivo local
+   (`certs/`) + env vars, com validação e envio automático no boot da aplicação.
+7. **Venda no Balcão** (`/admin/nova-venda`) — nova tela reaproveitando
+   `CheckoutForm`/`ProductModal` (parametrizados) e um carrinho isolado.
+8. **Preparação de infraestrutura de produção**: Dockerfile, docker-compose, nginx, PM2,
+   scripts de deploy/backup/restore, `.env.production.example`, `/api/health`, índices de
+   FK faltando.
+9. **Revisão final de produção** com testes reais em todos os fluxos — encontrou e
+   corrigiu os bugs listados em §19.
+10. **Este HANDOFF.md** (reescrito do zero, mais completo e reorganizado).
+
+Ver `git log --oneline` no repositório pra mensagens de commit detalhadas de cada etapa.
+
+---
+
+## 19. Bugs corrigidos
+
+Lista de todos os bugs reais encontrados e corrigidos nesta sessão (por testes reais e/ou
+auditoria de código), do mais recente ao mais antigo:
+
+- **Crítico** — `Dockerfile`: estágio final não copiava as dependências do CLI do Prisma
+  (`dotenv`, `c12`, `effect`, `deepmerge-ts`, `empathic`) nem `prisma.config.ts` — o
+  container entraria em **crash-loop** ao tentar `prisma migrate deploy` no start.
+- **Alto** — Checkout do site: o carrinho persistido (zustand + localStorage) ainda não
+  tinha reidratado quando o guard de "carrinho vazio" rodava, redirecionando **todo
+  cliente de volta pro cardápio** pouco depois de abrir `/checkout`.
+- Checkout do site: quando não há bairro de entrega cadastrado, o formulário abria com
+  "Entrega" (desabilitada) selecionada por padrão em vez de "Retirada", mostrando campos
+  de endereço inúteis.
+- `GET /api/health` vazava a mensagem de erro bruta do Prisma no corpo público da
+  resposta (poderia expor host/porta do banco durante uma indisponibilidade).
+- Telefone sintético gerado na Venda no Balcão (`Date.now() + Math.random()*1000`) tinha
+  risco real de colisão entre vendas simultâneas — trocado por gerador com muito mais
+  entropia (`crypto.getRandomValues`).
+- `docker-compose.yml`: nginx podia subir e começar a proxied antes do app estar
+  saudável (só esperava o container existir, não o healthcheck passar).
+- Race condition: emissão fiscal manual + automática rodando ao mesmo tempo podiam gerar
+  **duas NFC-e reais** pro mesmo pedido — corrigido com reivindicação atômica
+  (status `"emitindo"`) antes de chamar o provider.
+- Race condition: duas requisições simultâneas de `GET /api/orders/[id]/pix` podiam
+  ambas tentar criar o `PixCharge` e uma delas quebrar com erro de constraint única.
+- `updateOrderStatus` não tinha proteção contra dois admins mudando o mesmo pedido ao
+  mesmo tempo (last-write-wins silencioso) — agora usa concorrência otimista
+  (`previousStatus`), respondendo 409 em conflito.
+- Webhook do PagBank podia, em teoria, reabrir/pagar um pedido já cancelado — corrigido
+  com guard `status != "cancelado"` no update.
+- Falta de rate limiting em: login do cliente B2B, criação de pedido, geração de Pix,
+  webhook do PagBank (só o login admin tinha antes).
+- Timing leak no login do cliente B2B (bcrypt só rodava se o e-mail existisse, revelando
+  por tempo de resposta se a conta existia) — corrigido com hash-dummy.
+- `JWT_SECRET`/`FISCAL_ENCRYPTION_KEY` só validavam **comprimento mínimo de 16**
+  caracteres apesar da documentação pedir 32 — corrigido a checagem.
+- Validações de input incompletas: `cpfCnpj` sem formato, `cashChangeForCents` sem teto,
+  campos de endereço do portal do cliente sem limite de tamanho.
+- Índice faltando em `PixCharge.externalId` (consultado a cada webhook) e em
+  `Order.customerId`/`Order.deliveryZoneId`/`OrderItem.productId`.
+
+---
+
+## 20. Decisões arquiteturais e motivos
+
+| Decisão | Motivo |
+|---|---|
+| Monolito Next.js (sem microsserviços/fila) | Porte do negócio (uma lanchonete) não justifica a complexidade operacional. Reavaliar só se o sistema virar multi-tenant de verdade (vários clientes B2B ativos ao mesmo tempo). |
+| Status como `String`, não enum nativo do Postgres | Portabilidade entre ambientes de dev (SQLite, no passado) e produção (Postgres) sem migração de tipo; documentado em comentário no schema. |
+| Postgres em vez de SQLite | Incidente real: Vercel tem filesystem efêmero, SQLite não sobrevive entre deploys/invocações — forçou a migração logo no início do projeto. |
+| Certificado A1 em arquivo local + env vars (não mais tela admin) | Pedido explícito do cliente pra simplificar a implantação — o operador instala o certificado manualmente durante o deploy, sem depender de upload via navegador. Consequência aceita: **exige disco persistente**, então incompatível com Vercel (daí a migração pra VPS). |
+| Credenciais do PagBank no banco (criptografadas), não em env var | O cliente configura pelo painel no dia a dia (pode trocar ambiente sandbox/produção sem precisar reiniciar o servidor ou mexer no `.env`) — diferente do fiscal, que é configurado uma vez na implantação. |
+| Venda no Balcão reaproveitando `CheckoutForm`/`ProductModal` (props parametrizadas) em vez de tela nova do zero | Pedido explícito do cliente: "não duplicar código, não criar sistema separado". Os componentes viraram genéricos (qual carrinho usar, quais tipos de entrega mostrar, contato obrigatório ou não) mantendo o comportamento padrão do site 100% igual. |
+| Webhook do PagBank sem verificação de assinatura, mas sempre reconfirmando server-to-server | Não há documentação seguríssima de qual header o PagBank usa hoje pra assinatura — decidiu-se mitigar o risco real (marcar pedido como pago indevidamente) reconfirmando direto na API deles, em vez de confiar no corpo da notificação. Rate limit como mitigação adicional de abuso. Ver pendência em §21. |
+| Impressão via popup + `window.print()`, não ESC/POS real | Construir integração de verdade com impressora térmica de rede/USB exige saber modelo/conexão específicos, que não estavam disponíveis — ficou documentado como limitação conhecida, não implementado às pressas de forma arriscada. |
+| Rate limiting em memória (`Map`), não Redis | Simplicidade — o PM2 roda em `instances: 1`/modo fork (não cluster), então não há múltiplos processos com estado de rate-limit divergente. Documentado que precisa virar Redis se escalar horizontalmente. |
+| Reivindicação atômica (`"emitindo"`) em vez de lock de banco explícito pra evitar NFC-e duplicada | Mudança mínima e local (um campo de status a mais), sem precisar de infraestrutura de lock distribuído — suficiente porque o app roda como processo único. |
+| Docker builder copia `node_modules` completo no runner (não só subpastas) | Depois de descobrir que copiar só `.prisma`/`@prisma`/`prisma`/`tsx` quebrava `prisma migrate deploy` no CMD (faltavam dependências transitivas do CLI do Prisma), decidiu-se pela cópia completa — perde um pouco do ganho de tamanho do `output: standalone`, mas é a opção correta e sem risco de "whack-a-mole" de dependência faltando. |
+
+---
+
+## 21. Pendências restantes
+
+- **NCM/CFOP/CSOSN por produto**: nenhum dos ~106 produtos do cardápio tem esses campos
+  preenchidos — a emissão fiscal (manual ou automática) vai falhar graciosamente até
+  isso ser feito produto a produto em `/admin/produtos`.
+- **Certificado A1 real**: precisa ser instalado manualmente em `certs/certificado.pfx`
+  no VPS de produção (hoje só existe a estrutura/validação, não um certificado real).
+- **Credenciais reais da Nuvem Fiscal e do PagBank**: ainda não configuradas em nenhum
+  ambiente real (só testadas com credenciais ausentes/erros tratados).
+- **Webhook do PagBank sem verificação de assinatura**: mitigado por reconfirmação
+  server-to-server + rate limit, mas não é autenticação de verdade. Implementar quando
+  se tiver a documentação exata do header de assinatura da PagBank em mãos.
+- **Recuperação de senha do portal do cliente**: não existe fluxo automático — só uma
+  página estática pedindo pra contatar o suporte por e-mail.
+- **Sessões JWT sem revogação**: trocar a senha não invalida tokens já emitidos em outros
+  dispositivos (só expiram naturalmente em 7 dias).
+- **`JWT_SECRET` compartilhado** entre sessão admin e sessão do cliente B2B — dois
+  domínios de confiança diferentes usando a mesma chave.
+- **Sem token de acesso dedicado no link do Pix** (`/pedido/[id]`) — a proteção é só o
+  `id` ser um cuid não-adivinhável, não uma autenticação de verdade.
+- **Impressão não é real** (ESC/POS) — depende do navegador + diálogo de impressão do
+  SO, como explicado em §12/§20.
+- Migration histórica órfã (`20260703143145_init_postgres`, ver §4) — inofensiva, só
+  cosmética no `migrate status`.
+
+---
+
+## 22. Deploy completo em VPS do zero
+
+### Opção A — PM2 (recomendado pela simplicidade)
 
 ```bash
-npm install
-cp .env.example .env        # preencher DATABASE_URL (postgres), JWT_SECRET, FISCAL_ENCRYPTION_KEY
-npm run prisma:migrate       # aplica as migrations no Postgres (cria as tabelas)
-npm run prisma:seed          # cardápio real + admin (senha 12345) + settings
-npm run dev
+# 1. Sistema
+sudo apt update && sudo apt install -y nginx postgresql postgresql-contrib certbot python3-certbot-nginx
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+sudo npm install -g pm2
+
+# 2. Banco
+sudo -u postgres createuser rutelanches -P
+sudo -u postgres createdb rutelanches -O rutelanches
+
+# 3. Código
+git clone <seu-repo> rute-lanches && cd rute-lanches
+cp .env.production.example .env
+nano .env                 # preencher DATABASE_URL, JWT_SECRET, FISCAL_ENCRYPTION_KEY...
+chmod +x scripts/*.sh     # necessário — bit executável não vem do Git no Windows
+
+# 4. Certificado A1 (se for emitir NFC-e de verdade)
+#    copiar o .pfx real para certs/certificado.pfx
+#    preencher FISCAL_CERTIFICADO_SENHA no .env
+
+# 5. Instalação
+./scripts/install.sh
+
+# 6. Nginx + HTTPS
+sudo cp nginx/default.conf /etc/nginx/sites-available/rute-lanches
+sudo ln -s /etc/nginx/sites-available/rute-lanches /etc/nginx/sites-enabled/
+# editar server_name pro domínio real
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d seu-dominio.com.br -d www.seu-dominio.com.br
+
+# 7. Deixar o PM2 sobreviver a reboot
+pm2 startup    # rodar o comando que ele imprimir
+pm2 save
+
+# 8. Agendar backup diário
+crontab -e
+# adicionar: 0 3 * * * cd /caminho/do/projeto && ./scripts/backup.sh >> logs/backup.log 2>&1
 ```
 
-Site: `http://localhost:3000` · Admin: `http://localhost:3000/admin/login` (senha `12345`,
-ou o valor de `SEED_ADMIN_PASSWORD` no `.env`).
+### Opção B — Docker Compose
 
-Comandos úteis: `npm run build` (roda `prisma generate && prisma migrate deploy && next
-build` — ver §15), `npm run lint`, `npm run prisma:studio` (editor visual do banco), `npm
-run prisma:migrate` (nova migration a partir de mudanças no `schema.prisma`).
+```bash
+sudo apt update && sudo apt install -y docker.io docker-compose-plugin certbot
+git clone <seu-repo> rute-lanches && cd rute-lanches
+cp .env.production.example .env
+nano .env
+chmod +x scripts/*.sh
+# certificado real em certs/certificado.pfx
+
+docker compose build
+docker compose up -d
+docker compose exec app npx tsx prisma/seed.ts   # só na primeira vez
+
+# HTTPS: apontar DNS, rodar certbot no host (ou container dedicado), descomentar
+# o bloco 443 em nginx/default.conf, `docker compose restart nginx`
+```
+
+### Depois do primeiro deploy (ambas opções)
+1. Testar `curl https://seu-dominio.com.br/api/health` — deve retornar `"status":"ok"`.
+2. Logar em `/admin/login` com a senha do seed e **trocar a senha imediatamente**.
+3. Fazer um pedido de teste real pelo site e verificar que aparece no Kanban.
+4. Configurar PagBank e Nuvem Fiscal (ver §23).
 
 ---
 
-## 15. Deploy na Vercel — incidente de 2026-07-09 e correção
+## 23. Configurar PagBank, Nuvem Fiscal e certificado A1
 
-**Sintoma**: build passava na Vercel, mas qualquer página (inclusive a home) mostrava a
-tela genérica "This page couldn't load / A server error occurred" com um código de erro.
+### PagBank
+1. Login no admin → `/admin/configuracoes` → seção "PagBank (Pix)".
+2. Preencher Client ID / Client Secret / Token reais (sandbox pra testar, produção
+   quando validado).
+3. Escolher ambiente (Sandbox/Produção).
+4. Clicar "Testar conexão" — deve confirmar sucesso.
+5. Definir `APP_URL` no `.env` do servidor com o domínio real (usado na
+   `notification_url` do webhook) e reiniciar a aplicação.
+6. Fazer um pedido Pix de teste e confirmar que o QR/copia-e-cola aparecem.
 
-**Causa raiz**: `DATABASE_URL` apontava para SQLite (`file:./dev.db`, um arquivo local).
-Funções serverless da Vercel rodam num sistema de arquivos somente-leitura/efêmero — não
-existe onde o SQLite gravar/ler o arquivo do banco em produção. Toda página pública já
-passa por `prisma` logo de cara (`RootLayout` e `(site)/layout.tsx` chamam
-`getSettings()`), então a request inteira quebrava antes de renderizar qualquer HTML.
+### Nuvem Fiscal
+1. No `.env` do servidor: `FISCAL_PROVIDER="nuvem_fiscal"`, `NUVEM_FISCAL_CLIENT_ID`,
+   `NUVEM_FISCAL_CLIENT_SECRET`, `FISCAL_AMBIENTE="homologacao"` (trocar pra
+   `"producao"` só depois de validar).
+2. Os dados cadastrais da empresa (CNPJ, razão social, endereço, CNAE) já estão
+   preenchidos via seed — conferir em `prisma/seed.ts` → `seedFiscalConfig` se precisar
+   ajustar algo.
+3. Reiniciar a aplicação — o boot valida o certificado (próximo passo) e, se tudo OK,
+   cadastra a empresa e envia o certificado automaticamente.
 
-**O que foi corrigido** (só infraestrutura/robustez — nenhuma mudança de UI, design ou
-funcionalidade):
-1. **`schema.prisma`**: `provider` trocado de `sqlite` para `postgresql` (ver §4 para o
-   detalhe das migrations).
-2. **`package.json`**: `"build"` agora roda `prisma generate && prisma migrate deploy &&
-   next build` (aplica migrations pendentes a cada deploy) e `"postinstall": "prisma
-   generate"` (garante que o client sempre é gerado, mesmo se o passo de build mudar).
-3. **Fallback seguro em vez de 500** nas páginas públicas mais acessadas:
-   - `getSettingsSafe()` (`settings-service.ts`) — se o banco estiver inacessível, retorna
-     configurações padrão com `storeOpen: false` (mais seguro que fingir que está aberto)
-     em vez de lançar. Usada em `RootLayout`, `(site)/layout.tsx` e `checkout/page.tsx`.
-   - `(site)/page.tsx` — busca de categorias/produtos embrulhada em try/catch; se falhar,
-     cai para lista vazia, que o `MenuBrowser` já trata com "Cardápio em atualização" (não
-     precisou de UI nova).
-   - `checkout/page.tsx` — bairros de entrega com o mesmo tratamento (lista vazia = só
-     retirada, comportamento que já existia para "nenhum bairro cadastrado").
-   - Todos os fallbacks logam com `console.error` e uma mensagem específica apontando pra
-     `DATABASE_URL`/migrations — aparece nos **Vercel Function Logs** pra debug rápido.
-4. **`src/app/error.tsx` e `src/app/global-error.tsx`** (novos — não existiam nenhum
-   error boundary antes): qualquer erro não tratado que sobrar (ex: `JWT_SECRET` ausente
-   derrubando uma página admin) agora cai numa tela própria da aplicação ("Algo deu
-   errado" + botão "Tentar novamente" + código de referência), nunca mais na tela genérica
-   da Vercel. `global-error.tsx` usa estilo inline (não Tailwind) de propósito — ele
-   substitui o `<html>/<body>` inteiro e não pode depender do CSS ter carregado.
+### Certificado A1
+1. Copiar o arquivo `.pfx`/`.p12` real para `certs/certificado.pfx` no servidor.
+2. `chmod 600 certs/certificado.pfx`.
+3. Preencher `FISCAL_CERTIFICADO_SENHA` no `.env` com a senha real do certificado.
+4. Reiniciar a aplicação e checar os logs — deve aparecer algo como "Certificado A1
+   enviado ao provider fiscal com sucesso". Se aparecer erro, a mensagem já indica o que
+   corrigir (arquivo não encontrado, senha incorreta, certificado vencido).
+5. Preencher NCM/CFOP/CSOSN/unidade comercial de cada produto que for vendido com nota
+   fiscal, em `/admin/produtos`.
+6. Emitir uma NFC-e de teste em homologação antes de trocar pra produção.
 
-**Migrations**: as 6 migrations antigas (sintaxe SQLite) foram apagadas e substituídas por
-uma única `20260707160000_init_postgresql/migration.sql`, gerada offline com `npx prisma
-migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` (não
-precisa de um Postgres real rodando pra gerar o SQL, só precisa de uma `DATABASE_URL` com
-formato válido). Decisão discutida e confirmada com o cliente antes de apagar — segura
-porque o banco de produção nunca tinha rodado nenhuma migration.
+---
 
-**O que NÃO foi possível testar neste ambiente** (sem Postgres disponível localmente):
-`prisma migrate deploy` contra um banco real, e o `next build` completo (a etapa de
-type-check duplicada do Next.js estourou a memória da máquina local — ambiente já estava
-com pouca RAM livre; **não é um erro de código** — `tsc --noEmit` e `eslint` passaram
-100% limpos, e o Next chegou a confirmar "Compiled successfully" antes de travar nessa
-etapa redundante. A Vercel tem bem mais memória de build e não deve ter esse problema.
+## 24. Checklist de produção
 
-### Variáveis a cadastrar no painel da Vercel (Project Settings → Environment Variables)
+- [ ] `.env` real preenchido (não os placeholders de `.env.production.example`)
+- [ ] `JWT_SECRET` e `FISCAL_ENCRYPTION_KEY` gerados com ≥32 caracteres aleatórios
+- [ ] `chmod +x scripts/*.sh`
+- [ ] Senha do admin trocada (não deixar `12345`)
+- [ ] Backup agendado no cron (`scripts/backup.sh`)
+- [ ] DNS apontando pro servidor + HTTPS via certbot funcionando
+- [ ] `GET /api/health` respondendo `"status":"ok"` publicamente
+- [ ] PagBank configurado e testado (sandbox antes de produção)
+- [ ] Nuvem Fiscal configurada, certificado A1 instalado e validado no boot
+- [ ] NCM/CFOP/CSOSN preenchidos nos produtos que serão vendidos com nota
+- [ ] Um pedido de teste completo (site) e uma venda de teste (balcão) conferidos
+- [ ] Impressora configurada como padrão no computador que roda o Kanban
 
-| Variável | Valor |
-|---|---|
-| `DATABASE_URL` | connection string do Postgres (Vercel Postgres/Neon/Supabase — inclua `?sslmode=require`) |
-| `JWT_SECRET` | string aleatória ≥32 chars (gerar com o comando do §5) |
-| `FISCAL_ENCRYPTION_KEY` | string aleatória ≥32 chars (só necessária se for usar o módulo fiscal) |
-| `SEED_ADMIN_EMAIL` | opcional — só usado ao rodar o seed |
-| `SEED_ADMIN_PASSWORD` | opcional — só usado ao rodar o seed; troque a senha pelo painel depois (ver §6) |
+---
 
-Marque todas para **Production**, **Preview** e **Development** (a menos que use bancos
-diferentes por ambiente). Depois de configurar, redeploy — o `prisma migrate deploy` do
-`build` script cria as tabelas automaticamente no primeiro deploy. Se o banco ainda
-estiver vazio depois disso (cardápio não aparece), rode `npm run prisma:seed` **uma vez**
-localmente apontando `DATABASE_URL` pro banco de produção (ou rode via `vercel env pull` +
-`npx tsx prisma/seed.ts` localmente).
+## 25. Credenciais/segredos necessários (sem valores)
 
-### Seed rodado em produção (2026-07-09)
+| Segredo | Onde configurar | Gerar com |
+|---|---|---|
+| Senha do Postgres | `.env` (`DATABASE_URL`) / `docker-compose.yml` env | gerenciador de senhas |
+| `JWT_SECRET` | `.env` | `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` |
+| `FISCAL_ENCRYPTION_KEY` | `.env` | mesmo comando acima |
+| Senha do admin (login) | seed inicial, depois trocar pelo painel | — |
+| `NUVEM_FISCAL_CLIENT_ID`/`CLIENT_SECRET` | `.env` | painel da Nuvem Fiscal |
+| Senha do certificado A1 (`FISCAL_CERTIFICADO_SENHA`) | `.env` | emitida junto com o certificado (cartório/AC) |
+| Client ID / Client Secret / Token do PagBank | painel admin (Configurações → PagBank) | painel do PagBank |
+| Senha do e-mail/usuário do cliente B2B | seed inicial (`seedClienteRuteLanches`) | — |
 
-Rodado manualmente contra o Neon de produção (`DATABASE_URL` passada inline, nunca
-commitada): **7 categorias, 106 produtos**, settings padrão da loja e admin criado com
-`admin@rutelanches.com.br` / senha `12345` (o cliente não tinha passado
-`SEED_ADMIN_EMAIL`/`SEED_ADMIN_PASSWORD` customizados nesse run — **trocar a senha pelo
-painel assim que possível**, ver §6).
+---
 
-### Bug encontrado logo depois: login com "Falha de conexão"
+## 26. Próximas melhorias sugeridas
 
-**Sintoma**: depois do site subir e o cardápio aparecer, o login do admin (`/admin/login`)
-falhava com "Falha de conexão" — mensagem do catch genérico em `login-form.tsx`, que só
-aparece quando o `fetch()` não consegue interpretar a resposta como JSON.
+Em ordem aproximada de valor/esforço:
 
-**Causa raiz**: `POST /api/auth/login` (`src/app/api/auth/login/route.ts`) não tinha
-try/catch — se `JWT_SECRET` estiver ausente ou tiver menos de 16 caracteres na Vercel,
-`createSessionToken()` lança (`getJwtSecret()` em `auth.ts`), a rota quebra sem devolver
-corpo JSON, e o client interpreta isso como falha de rede em vez de erro de servidor.
-**Confirmado localmente**: rodando o dev server contra o Postgres de produção, login
-funcionou normalmente com `JWT_SECRET` válido (200, retornou os dados do admin); com
-`JWT_SECRET` propositalmente curto, reproduziu exatamente o sintoma antes da correção.
-
-**Correção**: `POST /api/auth/login` agora embrulha toda a lógica (consulta ao admin,
-verificação de senha, criação do token) num try/catch — qualquer erro inesperado devolve
-`{ error: "Erro ao processar login. Tente novamente em instantes." }` com status 500 (JSON
-válido, o client mostra a mensagem certa) e loga o erro original completo com
-`console.error` (aparece nos **Vercel Function Logs**, apontando exatamente qual variável
-checar).
-
-**Ação pendente do lado do cliente**: confirmar que `JWT_SECRET` está cadastrada na Vercel
-(Project Settings → Environment Variables, para **Production**) com uma string aleatória
-≥32 caracteres — é bem provável que essa variável não tenha sido cadastrada ainda (só
-`DATABASE_URL` foi confirmada até aqui).
-
-### Gotcha adicional: disco cheio na máquina de desenvolvimento
-
-Durante esse diagnóstico, o disco C: da máquina local chegou a **0 bytes livres**, o que
-impedia até `Edit`/`npm install` (`ENOSPC`). Não é um problema do projeto — mas se
-reaparecer, procure instaladores/ISOs grandes soltos em Downloads (`.exe`, `.iso`,
-`.msi`) que já cumpriram a função de instalar algo; são os maiores candidatos a apagar
-com segurança antes de mexer no projeto de novo.
-
-## 16. Infraestrutura de produção — VPS (2026-07-14)
-
-O projeto ganhou suporte a dois caminhos de deploy em VPS (Ubuntu 24.04 recomendado),
-sem depender da Vercel:
-
-1. **PM2 direto no servidor** (`ecosystem.config.js` + `scripts/*.sh`) — o caminho mais
-   simples, sem Docker. Node.js, PostgreSQL e Nginx instalados diretamente no sistema.
-2. **Docker Compose** (`Dockerfile` + `docker-compose.yml` + `nginx/`) — app, postgres e
-   nginx como containers, pra quem prefere isolamento/portabilidade.
-
-Os dois caminhos usam o mesmo `.env` (copiado de `.env.production.example`) e os mesmos
-diretórios persistentes: `certs/` (certificado A1, nunca no Git — ver §7.1), `logs/`,
-`backups/`, `public/uploads/`.
-
-### Scripts (`scripts/`)
-- `install.sh` — primeira instalação: `npm ci` → `prisma generate` → `prisma migrate
-  deploy` → seed → `next build` → `pm2 start`.
-- `update.sh` — deploy de uma nova versão: `git pull` → `npm install` → `prisma migrate
-  deploy` → `next build` → `pm2 restart`.
-- `backup.sh` — `pg_dump` compactado em `backups/`, mantém os 14 mais recentes (ajustar
-  `KEEP` conforme a rotina real). Pode ser agendado no cron.
-- `restore.sh` — restaura um `.sql.gz` de `backups/` (pede confirmação explícita antes de
-  sobrescrever o banco).
-
-### Health check
-`GET /api/health` (`src/app/api/health/route.ts`) — sem sessão, retorna `status`
-("ok"/"degraded"), conexão com o banco (com latência), versão (`package.json`), uptime do
-processo e `NODE_ENV`. Usado pelo healthcheck do `docker-compose.yml` e serve pra
-monitoramento externo (uptime robot, etc.).
-
-### Índices adicionados nesta preparação
-`Order.customerId`, `Order.deliveryZoneId` e `OrderItem.productId` não tinham índice
-(Postgres, ao contrário do MySQL, não cria automaticamente em chave estrangeira) — ver
-migration `20260714170000_add_missing_fk_indexes`.
-
-### PagBank e variáveis de ambiente — atenção
-`.env.production.example` lista `PAGBANK_CLIENT_ID`/`PAGBANK_CLIENT_SECRET`/`PAGBANK_TOKEN`
-só por completude/documentação — **essas variáveis não são lidas pelo código hoje**. As
-credenciais do PagBank continuam configuradas pelo painel admin (Configurações → PagBank)
-e ficam guardadas criptografadas na tabela `pagbank_config` (ver §PagBank em seções
-anteriores). Se quiser migrar isso pra env vars também (mesmo padrão do fiscal), é uma
-mudança de código à parte, não incluída nesta preparação de infraestrutura.
+1. Preencher NCM/CFOP/CSOSN dos produtos (bloqueador de negócio, não técnico).
+2. Verificação de assinatura real no webhook do PagBank, assim que a documentação exata
+   estiver em mãos.
+3. Recuperação de senha automática (e-mail com token) pro portal do cliente B2B.
+4. Separar `JWT_SECRET` do admin e do cliente B2B em duas variáveis.
+5. Token de acesso dedicado (não só o cuid) no link `/pedido/[id]`.
+6. Se o volume de pedidos crescer muito ou o sistema virar multi-tenant de verdade:
+   trocar o rate-limiter em memória por Redis, considerar `prisma.order.aggregate` em
+   vez de buscar linhas pra estatísticas.
+7. Integração real com impressora térmica (ESC/POS via rede), se o cliente tiver um
+   modelo específico e quiser eliminar a dependência do navegador.
+8. Upgrade do Prisma para a v7 (major version disponível) — testar com cuidado antes,
+   não é urgente.
