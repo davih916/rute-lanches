@@ -92,7 +92,7 @@ export async function issueFiscalDocumentForOrder(orderId: string): Promise<Fisc
     deliveryFeeCents: order.deliveryFeeCents,
     totalCents: order.totalCents,
     paymentMethod: order.paymentMethod as "pix" | "dinheiro" | "cartao_credito" | "cartao_debito",
-    deliveryType: order.deliveryType as "entrega" | "retirada",
+    deliveryType: order.deliveryType as "entrega" | "retirada" | "balcao",
     customerName: order.customer.name,
     customerDocument: order.fiscal?.customerDocument ?? null,
     items,

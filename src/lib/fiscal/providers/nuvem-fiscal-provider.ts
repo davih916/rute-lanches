@@ -56,6 +56,7 @@ const PAYMENT_METHOD_TPAG: Record<FiscalIssueInput["paymentMethod"], string> = {
  */
 const DELIVERY_TYPE_IND_PRES: Record<FiscalIssueInput["deliveryType"], number> = {
   retirada: 1,
+  balcao: 1,
   entrega: 4,
 };
 

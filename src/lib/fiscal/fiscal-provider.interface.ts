@@ -23,7 +23,7 @@ export interface FiscalIssueInput {
   deliveryFeeCents: number;
   totalCents: number;
   paymentMethod: "pix" | "dinheiro" | "cartao_credito" | "cartao_debito";
-  deliveryType: "entrega" | "retirada";
+  deliveryType: "entrega" | "retirada" | "balcao";
   customerName: string;
   customerDocument?: string | null;
   items: FiscalIssueItem[];

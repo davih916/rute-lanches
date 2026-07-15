@@ -82,12 +82,13 @@ export function parseAcceptedPaymentMethods(raw: string): PaymentMethod[] {
   }
 }
 
-export const DELIVERY_TYPES = ["entrega", "retirada"] as const;
+export const DELIVERY_TYPES = ["entrega", "retirada", "balcao"] as const;
 export type DeliveryType = (typeof DELIVERY_TYPES)[number];
 
 export const DELIVERY_TYPE_LABELS: Record<DeliveryType, string> = {
   entrega: "Entrega",
   retirada: "Retirada no local",
+  balcao: "Balcão",
 };
 
 export const FISCAL_STATUSES = ["aguardando_emissao", "emitida", "erro"] as const;

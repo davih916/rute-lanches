@@ -180,7 +180,7 @@ model Order {
   status           String    @default("recebido")
   // "recebido" (novo pedido) | "preparando" | "saiu_entrega" | "entregue" | "cancelado"
   deliveryType     String    @default("entrega")
-  // "entrega" | "retirada"
+  // "entrega" | "retirada" | "balcao" (venda no balcão, criada pelo admin)
   paymentMethod    String
   // "pix" | "dinheiro" | "cartao_credito" | "cartao_debito"
   paymentStatus    String    @default("pendente")

@@ -1,4 +1,4 @@
-import { prisma } from "@/lib/prisma";
+import { listActiveCategoriesWithProducts } from "@/lib/services/category-service";
 import { MenuBrowser } from "@/components/site/menu-browser";
 import type { CategoryView } from "@/lib/types";
 
@@ -10,19 +10,7 @@ import type { CategoryView } from "@/lib/types";
  */
 async function getCategoriesSafe() {
   try {
-    return await prisma.category.findMany({
-      where: { active: true },
-      orderBy: { order: "asc" },
-      include: {
-        products: {
-          where: { active: true },
-          orderBy: { order: "asc" },
-          include: {
-            addons: { where: { active: true } },
-          },
-        },
-      },
-    });
+    return await listActiveCategoriesWithProducts();
   } catch (error) {
     console.error(
       "[home] Falha ao carregar cardápio — verifique DATABASE_URL e se as migrations foram aplicadas (prisma migrate deploy).",

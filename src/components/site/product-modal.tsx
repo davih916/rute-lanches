@@ -7,17 +7,19 @@ import { Modal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { formatCentsToBRL } from "@/lib/money";
-import { useCartStore } from "@/store/cart-store";
+import { useCartStore, type CartStoreHook } from "@/store/cart-store";
 import type { ProductView } from "@/lib/types";
 
 interface ProductModalProps {
   product: ProductView | null;
   onClose: () => void;
+  /** Qual carrinho usar — o do site (padrão) ou o da tela "Nova Venda" (admin). */
+  useCartStoreHook?: CartStoreHook;
 }
 
-export function ProductModal({ product, onClose }: ProductModalProps) {
-  const addItem = useCartStore((s) => s.addItem);
-  const openCart = useCartStore((s) => s.openCart);
+export function ProductModal({ product, onClose, useCartStoreHook = useCartStore }: ProductModalProps) {
+  const addItem = useCartStoreHook((s) => s.addItem);
+  const openCart = useCartStoreHook((s) => s.openCart);
 
   const [quantity, setQuantity] = useState(1);
   const [notes, setNotes] = useState("");

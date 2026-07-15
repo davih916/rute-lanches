@@ -35,6 +35,23 @@ export async function listCategoriesForAdmin() {
   });
 }
 
+/** Categorias ativas + produtos/adicionais ativos — cardápio público e a tela "Nova Venda" do admin. */
+export async function listActiveCategoriesWithProducts() {
+  return prisma.category.findMany({
+    where: { active: true },
+    orderBy: { order: "asc" },
+    include: {
+      products: {
+        where: { active: true },
+        orderBy: { order: "asc" },
+        include: {
+          addons: { where: { active: true } },
+        },
+      },
+    },
+  });
+}
+
 export async function createCategory(input: CreateCategoryInput) {
   const slug = await uniqueCategorySlug(input.name);
   const maxOrder = await prisma.category.aggregate({ _max: { order: true } });

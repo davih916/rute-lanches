@@ -9,12 +9,20 @@ import { Button } from "@/components/ui/button";
 import { formatCentsToBRL, reaisToCents } from "@/lib/money";
 import {
   PAYMENT_METHOD_LABELS,
-  DELIVERY_TYPES,
   DELIVERY_TYPE_LABELS,
   type PaymentMethod,
   type DeliveryType,
 } from "@/lib/constants";
-import { useCartStore, getCartSubtotalCents, getCartItemLineTotal } from "@/store/cart-store";
+import {
+  useCartStore,
+  getCartSubtotalCents,
+  getCartItemLineTotal,
+  type CartStoreHook,
+} from "@/store/cart-store";
+
+function generatePlaceholderPhone(): string {
+  return `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+}
 
 interface DeliveryZoneOption {
   id: string;
@@ -26,16 +34,37 @@ interface CheckoutFormProps {
   storeOpen: boolean;
   acceptedPaymentMethods: PaymentMethod[];
   deliveryZones: DeliveryZoneOption[];
+  /** Qual carrinho usar — o do site (padrão) ou o da tela "Nova Venda" (admin). */
+  useCartStoreHook?: CartStoreHook;
+  /** Quais botões de "como quer receber" mostrar — o site nunca mostra "Balcão". */
+  deliveryTypeOptions?: DeliveryType[];
+  /** No site, nome/telefone do cliente são obrigatórios; na Venda no Balcão são opcionais. */
+  requireCustomerContact?: boolean;
+  submitLabel?: string;
+  /** Se informado, é chamado no lugar do redirecionamento padrão para /pedido/[id]. */
+  onOrderCreated?: (order: { id: string; paymentMethod: string }) => void;
+  /** O site redireciona pra home se o carrinho estiver vazio; a Venda no Balcão começa vazia de propósito. */
+  redirectIfEmpty?: boolean;
 }
 
-export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones }: CheckoutFormProps) {
+export function CheckoutForm({
+  storeOpen,
+  acceptedPaymentMethods,
+  deliveryZones,
+  useCartStoreHook = useCartStore,
+  deliveryTypeOptions = ["entrega", "retirada"],
+  requireCustomerContact = true,
+  submitLabel = "Enviar pedido",
+  onOrderCreated,
+  redirectIfEmpty = true,
+}: CheckoutFormProps) {
   const router = useRouter();
-  const items = useCartStore((s) => s.items);
-  const clear = useCartStore((s) => s.clear);
+  const items = useCartStoreHook((s) => s.items);
+  const clear = useCartStoreHook((s) => s.clear);
 
   const hasDeliveryZones = deliveryZones.length > 0;
   const [deliveryType, setDeliveryType] = useState<DeliveryType>(
-    hasDeliveryZones ? "entrega" : "retirada"
+    hasDeliveryZones && deliveryTypeOptions.includes("entrega") ? "entrega" : deliveryTypeOptions[0]
   );
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
@@ -58,11 +87,11 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
   const [hasSubmitted, setHasSubmitted] = useState(false);
 
   useEffect(() => {
-    if (items.length === 0 && !hasSubmitted) {
+    if (redirectIfEmpty && items.length === 0 && !hasSubmitted) {
       router.replace("/");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items.length, hasSubmitted]);
+  }, [items.length, hasSubmitted, redirectIfEmpty]);
 
   const subtotal = getCartSubtotalCents(items);
   const isDelivery = deliveryType === "entrega";
@@ -93,8 +122,12 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
         body: JSON.stringify({
           deliveryType,
           customer: {
-            name,
-            phone,
+            name: name || "Cliente Balcão",
+            // Telefone é obrigatório/único no cadastro do cliente — quando não
+            // informado (venda no balcão), gera um valor sintético só de
+            // dígitos (o campo aceita esse formato) pra não colidir com outro
+            // cliente sem telefone.
+            phone: phone || generatePlaceholderPhone(),
             address: isDelivery ? address : undefined,
             addressNumber: isDelivery ? addressNumber || undefined : undefined,
             complement: isDelivery ? complement || undefined : undefined,
@@ -125,14 +158,18 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
 
       setHasSubmitted(true);
       clear();
-      router.push(`/pedido/${data.order.id}`);
+      if (onOrderCreated) {
+        onOrderCreated(data.order);
+      } else {
+        router.push(`/pedido/${data.order.id}`);
+      }
     } catch {
       setError("Falha de conexão. Tente novamente.");
       setSubmitting(false);
     }
   }
 
-  if (items.length === 0 && !hasSubmitted) return null;
+  if (redirectIfEmpty && items.length === 0 && !hasSubmitted) return null;
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col gap-5">
@@ -176,8 +213,8 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
 
       <div className="flex flex-col gap-3">
         <p className="text-sm font-semibold text-neutral-800">Como você quer receber?</p>
-        <div className="grid grid-cols-2 gap-2">
-          {DELIVERY_TYPES.map((type) => {
+        <div className={`grid gap-2 ${deliveryTypeOptions.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+          {deliveryTypeOptions.map((type) => {
             const disabled = type === "entrega" && !hasDeliveryZones;
             return (
               <button
@@ -208,16 +245,16 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
         <p className="text-sm font-semibold text-neutral-800">Seus dados</p>
         <Input
           name="name"
-          label="Nome completo"
-          required
+          label={requireCustomerContact ? "Nome completo" : "Nome do cliente (opcional)"}
+          required={requireCustomerContact}
           autoComplete="name"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <Input
           name="phone"
-          label="Telefone / WhatsApp"
-          required
+          label={requireCustomerContact ? "Telefone / WhatsApp" : "Telefone (opcional)"}
+          required={requireCustomerContact}
           autoComplete="tel"
           placeholder="(11) 91234-5678"
           value={phone}
@@ -361,7 +398,7 @@ export function CheckoutForm({ storeOpen, acceptedPaymentMethods, deliveryZones 
       {error && <p className="text-sm font-medium text-red-600">{error}</p>}
 
       <Button type="submit" size="lg" loading={submitting} disabled={!storeOpen} className="w-full">
-        Enviar pedido
+        {submitLabel}
       </Button>
     </form>
   );
