@@ -204,6 +204,8 @@ model Order {
 
   @@index([status])
   @@index([createdAt])
+  @@index([customerId])
+  @@index([deliveryZoneId])
   @@map("orders")
 }
 
@@ -221,6 +223,7 @@ model OrderItem {
   addons OrderItemAddon[]
 
   @@index([orderId])
+  @@index([productId])
   @@map("order_items")
 }
 

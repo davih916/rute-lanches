@@ -826,3 +826,46 @@ impedia até `Edit`/`npm install` (`ENOSPC`). Não é um problema do projeto —
 reaparecer, procure instaladores/ISOs grandes soltos em Downloads (`.exe`, `.iso`,
 `.msi`) que já cumpriram a função de instalar algo; são os maiores candidatos a apagar
 com segurança antes de mexer no projeto de novo.
+
+## 16. Infraestrutura de produção — VPS (2026-07-14)
+
+O projeto ganhou suporte a dois caminhos de deploy em VPS (Ubuntu 24.04 recomendado),
+sem depender da Vercel:
+
+1. **PM2 direto no servidor** (`ecosystem.config.js` + `scripts/*.sh`) — o caminho mais
+   simples, sem Docker. Node.js, PostgreSQL e Nginx instalados diretamente no sistema.
+2. **Docker Compose** (`Dockerfile` + `docker-compose.yml` + `nginx/`) — app, postgres e
+   nginx como containers, pra quem prefere isolamento/portabilidade.
+
+Os dois caminhos usam o mesmo `.env` (copiado de `.env.production.example`) e os mesmos
+diretórios persistentes: `certs/` (certificado A1, nunca no Git — ver §7.1), `logs/`,
+`backups/`, `public/uploads/`.
+
+### Scripts (`scripts/`)
+- `install.sh` — primeira instalação: `npm ci` → `prisma generate` → `prisma migrate
+  deploy` → seed → `next build` → `pm2 start`.
+- `update.sh` — deploy de uma nova versão: `git pull` → `npm install` → `prisma migrate
+  deploy` → `next build` → `pm2 restart`.
+- `backup.sh` — `pg_dump` compactado em `backups/`, mantém os 14 mais recentes (ajustar
+  `KEEP` conforme a rotina real). Pode ser agendado no cron.
+- `restore.sh` — restaura um `.sql.gz` de `backups/` (pede confirmação explícita antes de
+  sobrescrever o banco).
+
+### Health check
+`GET /api/health` (`src/app/api/health/route.ts`) — sem sessão, retorna `status`
+("ok"/"degraded"), conexão com o banco (com latência), versão (`package.json`), uptime do
+processo e `NODE_ENV`. Usado pelo healthcheck do `docker-compose.yml` e serve pra
+monitoramento externo (uptime robot, etc.).
+
+### Índices adicionados nesta preparação
+`Order.customerId`, `Order.deliveryZoneId` e `OrderItem.productId` não tinham índice
+(Postgres, ao contrário do MySQL, não cria automaticamente em chave estrangeira) — ver
+migration `20260714170000_add_missing_fk_indexes`.
+
+### PagBank e variáveis de ambiente — atenção
+`.env.production.example` lista `PAGBANK_CLIENT_ID`/`PAGBANK_CLIENT_SECRET`/`PAGBANK_TOKEN`
+só por completude/documentação — **essas variáveis não são lidas pelo código hoje**. As
+credenciais do PagBank continuam configuradas pelo painel admin (Configurações → PagBank)
+e ficam guardadas criptografadas na tabela `pagbank_config` (ver §PagBank em seções
+anteriores). Se quiser migrar isso pra env vars também (mesmo padrão do fiscal), é uma
+mudança de código à parte, não incluída nesta preparação de infraestrutura.

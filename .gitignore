@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.production.example
 
 # vercel
 .vercel
@@ -45,10 +46,19 @@ next-env.d.ts
 /prisma/dev.db-journal
 
 # fotos de produtos enviadas pelo admin (conteúdo do usuário, não versionado)
-/public/uploads
+/public/uploads/*
+!/public/uploads/.gitkeep
 
 # certificado digital A1 (.pfx/.p12) — NUNCA deve entrar no Git. Instalado
 # manualmente no servidor durante o deploy — ver HANDOFF.md.
 /certs/*
 !/certs/README.md
+
+# logs do PM2/nginx/scripts — gerados em runtime no servidor.
+/logs/*
+!/logs/.gitkeep
+
+# backups do banco (scripts/backup.sh) — nunca devem ir pro Git (dados reais de clientes).
+/backups/*
+!/backups/.gitkeep
 
