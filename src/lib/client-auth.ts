@@ -2,6 +2,7 @@ import "server-only";
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { CLIENT_SESSION_COOKIE_NAME } from "@/lib/constants";
+import { isSecureRequest } from "@/lib/request-protocol";
 
 const SESSION_DURATION = "7d";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
@@ -40,7 +41,7 @@ export async function verifyClientSessionToken(token: string): Promise<ClientSes
 
 export async function setClientSessionCookie(token: string): Promise<void> {
   const cookieStore = await cookies();
-  cookieStore.set(CLIENT_SESSION_COOKIE_NAME, token, { httpOnly: true, secure: process.env.NODE_ENV === "production", sameSite: "lax", path: "/", maxAge: SESSION_MAX_AGE_SECONDS });
+  cookieStore.set(CLIENT_SESSION_COOKIE_NAME, token, { httpOnly: true, secure: await isSecureRequest(), sameSite: "lax", path: "/", maxAge: SESSION_MAX_AGE_SECONDS });
 }
 
 export async function clearClientSessionCookie(): Promise<void> {

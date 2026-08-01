@@ -11,6 +11,8 @@ certs/*
 !certs/README.md
 logs
 backups
+nginx/certbot/*
+nginx/webroot/*
 public/uploads/*
 !public/uploads/.gitkeep
 npm-debug.log*

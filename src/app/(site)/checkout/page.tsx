@@ -26,6 +26,8 @@ export default async function CheckoutPage() {
       <CheckoutForm
         storeOpen={isStoreOpenNow(settings)}
         acceptedPaymentMethods={parseAcceptedPaymentMethods(settings.acceptedPaymentMethods)}
+        storeWhatsapp={settings.whatsapp}
+        storeName={settings.storeName}
         deliveryZones={deliveryZones.map((zone) => ({
           id: zone.id,
           neighborhood: zone.neighborhood,

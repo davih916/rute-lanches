@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs";
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { SESSION_COOKIE_NAME } from "@/lib/constants";
+import { isSecureRequest } from "@/lib/request-protocol";
 
 const SESSION_DURATION = "7d";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
@@ -59,7 +60,7 @@ export async function setSessionCookie(token: string): Promise<void> {
   const cookieStore = await cookies();
   cookieStore.set(SESSION_COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure: await isSecureRequest(),
     sameSite: "lax",
     path: "/",
     maxAge: SESSION_MAX_AGE_SECONDS,

@@ -62,3 +62,10 @@ next-env.d.ts
 /backups/*
 !/backups/.gitkeep
 
+# certificados HTTPS emitidos pelo certbot (docker-compose.yml, serviço
+# "certbot") — contêm chave privada, NUNCA devem ir pro Git.
+/nginx/certbot/*
+!/nginx/certbot/.gitkeep
+/nginx/webroot/*
+!/nginx/webroot/.gitkeep
+

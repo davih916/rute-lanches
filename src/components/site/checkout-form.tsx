@@ -19,6 +19,7 @@ import {
   getCartItemLineTotal,
   type CartStoreHook,
 } from "@/store/cart-store";
+import { buildWhatsAppOrderLink, orderToWhatsAppSummary } from "@/lib/whatsapp";
 
 function generatePlaceholderPhone(): string {
   // Telefone é único no cadastro do cliente — precisa de entropia suficiente
@@ -38,6 +39,9 @@ interface CheckoutFormProps {
   storeOpen: boolean;
   acceptedPaymentMethods: PaymentMethod[];
   deliveryZones: DeliveryZoneOption[];
+  /** Número/nome da loja — usados para montar o link de confirmação quando paymentMethod = "whatsapp". */
+  storeWhatsapp?: string | null;
+  storeName?: string;
   /** Qual carrinho usar — o do site (padrão) ou o da tela "Nova Venda" (admin). */
   useCartStoreHook?: CartStoreHook;
   /** Quais botões de "como quer receber" mostrar — o site nunca mostra "Balcão". */
@@ -55,6 +59,8 @@ export function CheckoutForm({
   storeOpen,
   acceptedPaymentMethods,
   deliveryZones,
+  storeWhatsapp,
+  storeName = "",
   useCartStoreHook = useCartStore,
   deliveryTypeOptions = ["entrega", "retirada"],
   requireCustomerContact = true,
@@ -173,6 +179,15 @@ export function CheckoutForm({
 
       setHasSubmitted(true);
       clear();
+
+      // Tentativa best-effort de já abrir o WhatsApp com o pedido pronto —
+      // se o navegador bloquear o popup, o cliente ainda confirma pelo botão
+      // que aparece na página /pedido/[id] (WhatsAppOrderPanel).
+      if (paymentMethod === "whatsapp" && storeWhatsapp) {
+        const link = buildWhatsAppOrderLink(storeWhatsapp, orderToWhatsAppSummary(data.order, storeName));
+        window.open(link, "_blank", "noopener,noreferrer");
+      }
+
       if (onOrderCreated) {
         onOrderCreated(data.order);
       } else {

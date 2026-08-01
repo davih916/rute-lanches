@@ -50,7 +50,7 @@ export const NEXT_STATUS_ACTION_LABEL: Record<OrderStatus, string | null> = {
   cancelado: null,
 };
 
-export const PAYMENT_METHODS = ["pix", "dinheiro", "cartao_credito", "cartao_debito"] as const;
+export const PAYMENT_METHODS = ["pix", "dinheiro", "cartao_credito", "cartao_debito", "whatsapp"] as const;
 
 export type PaymentMethod = (typeof PAYMENT_METHODS)[number];
 
@@ -59,6 +59,7 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   dinheiro: "Dinheiro",
   cartao_credito: "Cartão de crédito",
   cartao_debito: "Cartão de débito",
+  whatsapp: "Combinar pelo WhatsApp",
 };
 
 /** Label com fallback seguro — pedidos antigos podem ter um valor que não existe mais aqui. */

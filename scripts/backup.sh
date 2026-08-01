@@ -26,8 +26,16 @@ mkdir -p backups
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 FILENAME="backups/rute-lanches_${TIMESTAMP}.sql.gz"
 
-echo "==> Gerando backup do PostgreSQL..."
-pg_dump "$DATABASE_URL" | gzip > "$FILENAME"
+# No deploy via Docker Compose, o Postgres roda só na rede interna do compose
+# (sem porta publicada pro host) — "postgres" na DATABASE_URL não resolve fora
+# dos containers. Detecta esse caso e roda o pg_dump de dentro do container.
+if command -v docker >/dev/null 2>&1 && [ -n "$(docker compose ps -q postgres 2>/dev/null)" ]; then
+  echo "==> Detectado Postgres via Docker Compose — gerando backup de dentro do container..."
+  docker compose exec -T postgres pg_dump -U "${POSTGRES_USER:-rutelanches}" "${POSTGRES_DB:-rutelanches}" | gzip > "$FILENAME"
+else
+  echo "==> Gerando backup do PostgreSQL..."
+  pg_dump "$DATABASE_URL" | gzip > "$FILENAME"
+fi
 echo "==> Backup salvo em $FILENAME ($(du -h "$FILENAME" | cut -f1))"
 
 # Mantém só os 14 backups mais recentes — ajuste conforme a rotina real de retenção.

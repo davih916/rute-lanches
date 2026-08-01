@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { CheckCircle2 } from "lucide-react";
 import { getOrderById } from "@/lib/services/order-service";
+import { getSettingsSafe } from "@/lib/services/settings-service";
 import { formatCentsToBRL } from "@/lib/money";
 import {
   ORDER_STATUS_LABELS,
@@ -11,6 +12,8 @@ import {
 } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { PixPaymentPanel } from "@/components/site/pix-payment-panel";
+import { WhatsAppOrderPanel } from "@/components/site/whatsapp-order-panel";
+import { orderToWhatsAppSummary } from "@/lib/whatsapp";
 
 export default async function OrderConfirmationPage({
   params,
@@ -18,7 +21,7 @@ export default async function OrderConfirmationPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const order = await getOrderById(id);
+  const [order, settings] = await Promise.all([getOrderById(id), getSettingsSafe()]);
 
   if (!order) notFound();
 
@@ -104,6 +107,13 @@ export default async function OrderConfirmationPage({
 
       {order.paymentMethod === "pix" && order.paymentStatus === "pendente" && (
         <PixPaymentPanel orderId={order.id} />
+      )}
+
+      {order.paymentMethod === "whatsapp" && (
+        <WhatsAppOrderPanel
+          storeWhatsapp={settings.whatsapp}
+          order={orderToWhatsAppSummary(order, settings.storeName)}
+        />
       )}
 
       <Link href="/" className="mt-5 block">

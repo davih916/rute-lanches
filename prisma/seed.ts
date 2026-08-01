@@ -843,6 +843,35 @@ const CATALOG: CategorySeed[] = [
 ];
 
 async function seedCatalog() {
+  // Proteção contra reseed destrutivo: este bloco apaga TODOS os produtos/
+  // categorias/itens de pedido antes de recriar o cardápio. Rodar isso contra
+  // um banco que já tem pedidos reais apagaria histórico de vendas (OrderItem)
+  // e todo o trabalho manual de NCM/CFOP/CSOSN feito produto a produto depois
+  // do primeiro deploy. install.sh roda este seed toda vez que é executado —
+  // sem esta trava, reexecutar install.sh por engano num sistema já em uso
+  // destruiria dados reais.
+  const [orderCount, categoryCount] = await Promise.all([
+    prisma.order.count(),
+    prisma.category.count(),
+  ]);
+
+  if (orderCount > 0) {
+    console.log(
+      `Catálogo NÃO reseedado: já existem ${orderCount} pedido(s) no banco. ` +
+        "Isso indica um sistema em produção — o seed do cardápio só roda em banco vazio, " +
+        "para não apagar histórico de pedidos nem edições feitas pelo admin."
+    );
+    return;
+  }
+
+  if (categoryCount > 0 && process.env.SEED_FORCE_CATALOG !== "true") {
+    console.log(
+      `Catálogo NÃO reseedado: já existem ${categoryCount} categoria(s) cadastrada(s). ` +
+        "Defina SEED_FORCE_CATALOG=true para forçar a recriação (isso apaga produtos/categorias atuais)."
+    );
+    return;
+  }
+
   // Ordem de deleção respeita as FKs (produtos/categorias sem pedidos ainda).
   await prisma.orderItemAddon.deleteMany();
   await prisma.orderItem.deleteMany();

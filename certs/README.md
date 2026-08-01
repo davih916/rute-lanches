@@ -13,8 +13,12 @@ dentro, exceto este README).
    FISCAL_CERTIFICADO_PATH="./certs/certificado.pfx"
    FISCAL_CERTIFICADO_SENHA="a senha real do certificado"
    ```
-3. Restrinja a permissão do arquivo para leitura só pelo usuário que roda a
-   aplicação, por exemplo: `chmod 600 certs/certificado.pfx`.
+3. Ajuste a permissão do arquivo para leitura: `chmod 644 certs/certificado.pfx`.
+   (Não use `600` — no deploy via Docker Compose o processo dentro do
+   container roda com um usuário próprio, `nextjs`, cujo UID normalmente **não
+   bate** com o dono do arquivo no host; `600` bloquearia a leitura do
+   certificado silenciosamente. `644` funciona nos dois modos de deploy, PM2 e
+   Docker.)
 4. Reinicie a aplicação. Na inicialização, o sistema:
    - valida se o arquivo existe, se a senha está correta e se o certificado
      não está vencido (loga um erro amigável se algo estiver errado);

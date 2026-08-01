@@ -28,11 +28,10 @@ RUN npx next build
 # --- runner: imagem final, só com o necessário pra rodar ---
 FROM base AS runner
 ENV NODE_ENV=production
-RUN groupadd --system nodejs && useradd --system --gid nodejs nextjs
 
 COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/prisma ./prisma
 COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 # O standalone do Next já traz um node_modules enxuto só com o que o SERVIDOR
@@ -43,9 +42,14 @@ COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 # quebrar o `migrate deploy` por dependência faltando).
 COPY --from=builder /app/node_modules ./node_modules
 
-RUN mkdir -p /app/certs /app/logs && chown -R nextjs:nodejs /app/certs /app/logs
+RUN mkdir -p /app/certs /app/logs
 
-USER nextjs
+# Roda como root de propósito (sem USER dedicado): certs/ e public/uploads/
+# são bind mounts do host (docker-compose.yml) e um usuário não-root dentro
+# do container quase nunca bate com o dono/UID desses arquivos no host — isso
+# bloquearia a leitura do certificado A1 e a escrita de fotos de produto
+# enviadas pelo admin. Mesmo modelo de confiança do deploy via PM2 (processo
+# já roda com o usuário que o iniciou no host, sem usuário dedicado).
 EXPOSE 3000
 ENV PORT=3000
 

@@ -48,12 +48,31 @@ services:
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./nginx/certbot:/etc/letsencrypt:ro
+      - ./nginx/webroot:/var/www/certbot:ro
       - ./logs/nginx:/var/log/nginx
     depends_on:
       app:
         condition: service_healthy
     networks:
       - internal
+
+  # Serviço sob demanda (não fica rodando) para emitir/renovar o certificado
+  # HTTPS via desafio HTTP-01. Uso, depois de apontar o DNS pro servidor:
+  #   docker compose run --rm certbot certonly --webroot -w /var/www/certbot \
+  #     -d seu-dominio.com.br -d www.seu-dominio.com.br \
+  #     --email seu-email@exemplo.com --agree-tos --no-eff-email
+  # Depois: descomentar o bloco 443 em nginx/default.conf e rodar
+  # `docker compose restart nginx`. Renovação: repetir com `renew` no lugar
+  # de `certonly ...` (pode agendar no cron do host).
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - ./nginx/certbot:/etc/letsencrypt
+      - ./nginx/webroot:/var/www/certbot
+    networks:
+      - internal
+    profiles:
+      - tools
 
 volumes:
   postgres_data:

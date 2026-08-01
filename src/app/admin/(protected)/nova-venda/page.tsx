@@ -46,7 +46,10 @@ export default async function NovaVendaPage() {
   return (
     <NovaVendaScreen
       storeOpen={isStoreOpenNow(settings)}
-      acceptedPaymentMethods={parseAcceptedPaymentMethods(settings.acceptedPaymentMethods)}
+      // "Combinar pelo WhatsApp" não faz sentido numa venda presencial (cliente já está no balcão).
+      acceptedPaymentMethods={parseAcceptedPaymentMethods(settings.acceptedPaymentMethods).filter(
+        (method) => method !== "whatsapp"
+      )}
       deliveryZones={deliveryZones.map((zone) => ({
         id: zone.id,
         neighborhood: zone.neighborhood,

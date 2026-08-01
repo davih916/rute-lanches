@@ -44,6 +44,14 @@ if [ "$CONFIRM" != "sim" ]; then
   exit 1
 fi
 
-echo "==> Restaurando $FILE..."
-gunzip -c "$FILE" | psql "$DATABASE_URL"
+# No deploy via Docker Compose, o Postgres roda só na rede interna do compose
+# (sem porta publicada pro host) — "postgres" na DATABASE_URL não resolve fora
+# dos containers. Detecta esse caso e roda o psql de dentro do container.
+if command -v docker >/dev/null 2>&1 && [ -n "$(docker compose ps -q postgres 2>/dev/null)" ]; then
+  echo "==> Detectado Postgres via Docker Compose — restaurando de dentro do container..."
+  gunzip -c "$FILE" | docker compose exec -T postgres psql -U "${POSTGRES_USER:-rutelanches}" "${POSTGRES_DB:-rutelanches}"
+else
+  echo "==> Restaurando $FILE..."
+  gunzip -c "$FILE" | psql "$DATABASE_URL"
+fi
 echo "==> Restauração concluída."

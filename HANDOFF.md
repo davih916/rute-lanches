@@ -4,7 +4,9 @@
 > conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
 > algo mudar de forma relevante, atualize este arquivo.
 >
-> Última atualização: 2026-07-15 (fim da sessão de preparação para produção).
+> Última atualização: 2026-07-28 (nova forma de pagamento "Combinar pelo WhatsApp" no
+> checkout — ver §6). Atualização anterior (2026-07-15): auditoria da infraestrutura de
+> deploy, sem alteração de funcionalidades.
 
 ---
 
@@ -346,8 +348,9 @@ createOrder() [src/lib/services/order-service.ts]
     número duplicado em pedidos concorrentes) + cria Order + OrderItems + Fiscal
     (status "aguardando_emissao")
    ↓
-Cliente é redirecionado pra /pedido/[id] — mostra status, resumo, e (se Pix) o
-PixPaymentPanel gerando a cobrança automaticamente
+Cliente é redirecionado pra /pedido/[id] — mostra status, resumo, e:
+  - se Pix: PixPaymentPanel gerando a cobrança automaticamente (polling 5s)
+  - se "Combinar pelo WhatsApp" (ver abaixo): WhatsAppOrderPanel com botão de confirmação
    ↓
 Pedido aparece no Kanban do admin (poll a cada 5s) em "Novo pedido"
    ↓
@@ -363,6 +366,25 @@ Transição "preparando" → "saiu_entrega": dispara automaticamente
 `DeliveryType` tem 3 valores: `"entrega"` (com bairro/taxa), `"retirada"` (sem taxa) e
 `"balcao"` (venda presencial criada pelo admin — ver §7). Fiscalmente, `retirada` e
 `balcao` são tratados como `indPres: 1` (presencial); `entrega` como `indPres: 4`.
+
+### Forma de pagamento "Combinar pelo WhatsApp"
+
+`PaymentMethod` inclui `"whatsapp"` — um pedido de verdade é criado no Kanban (mesmo
+pipeline acima, com histórico/status normal), e o cliente confirma com a loja pelo
+WhatsApp em vez de pagar ali. Ao enviar o pedido:
+
+1. `CheckoutForm` tenta abrir automaticamente uma aba do WhatsApp (`window.open`, melhor
+   esforço — pode ser bloqueado pelo navegador) com o pedido já formatado no texto
+   (`src/lib/whatsapp.ts` → `buildWhatsAppOrderLink`/`orderToWhatsAppSummary`).
+2. Em `/pedido/[id]`, o `WhatsAppOrderPanel` mostra o mesmo link como um botão manual —
+   garante que o cliente sempre consegue confirmar mesmo se o popup foi bloqueado.
+3. O número usado é `Settings.whatsapp` (Configurações → Identidade). Se estiver vazio, o
+   painel avisa que a loja não configurou um número, em vez de gerar um link quebrado.
+
+Só aparece como opção se o admin marcar "Combinar pelo WhatsApp" em Configurações →
+Formas de pagamento aceitas (não vem marcado por padrão no seed). Não aparece na Venda no
+Balcão (`/admin/nova-venda`) — não faz sentido "confirmar pelo WhatsApp" com o cliente já
+no balcão, então a tela filtra essa opção da lista.
 
 ---
 
@@ -597,8 +619,17 @@ Multi-stage (`base` → `deps` → `builder` → `runner`), tudo com a mesma ima
 ### `docker-compose.yml`
 Serviços: `postgres` (com healthcheck `pg_isready`), `app` (depende do postgres saudável,
 healthcheck via `GET /api/health`), `nginx` (depende do app saudável — corrigido nesta
-sessão, antes só esperava o processo existir). Volumes persistentes:
-`postgres_data` (nomeado), `./public/uploads`, `./certs`, `./logs` (bind mounts).
+sessão, antes só esperava o processo existir), `certbot` (perfil `tools` — não sobe com
+`docker compose up`, só roda sob demanda via `docker compose run --rm certbot ...` para
+emitir/renovar o certificado HTTPS). Volumes persistentes: `postgres_data` (nomeado),
+`./public/uploads`, `./certs`, `./logs`, `./nginx/certbot` (certificados emitidos),
+`./nginx/webroot` (desafio HTTP-01 do certbot) — todos bind mounts.
+
+O container `app` roda como **root** (sem usuário dedicado) de propósito: `certs/` e
+`public/uploads/` são bind mounts do host, e um usuário não-root dentro do container
+seria dono/UID diferente do dono desses arquivos no host — bloquearia a leitura do
+certificado A1 e a escrita de fotos de produto. Mesmo modelo de confiança do PM2 (processo
+roda com o usuário que o inicia no host).
 
 ### `ecosystem.config.js` (PM2)
 `script: "node_modules/next/dist/bin/next", args: "start"` (mais confiável que
@@ -661,7 +692,13 @@ executável não sobrevive a um `git` rodando no Windows).
 | `backup.sh` | `pg_dump $DATABASE_URL \| gzip` → `backups/rute-lanches_<timestamp>.sql.gz`, mantém os 14 mais recentes (ajustar `KEEP` conforme a rotina real). Pensado pra rodar via cron. |
 | `restore.sh` | Recebe o caminho do `.sql.gz`, **pede confirmação explícita** ("digite 'sim'") antes de sobrescrever o banco com `gunzip \| psql`. |
 
-`backup.sh`/`restore.sh` carregam `DATABASE_URL` do `.env` via `set -a; source .env; set +a`.
+`backup.sh`/`restore.sh` carregam `DATABASE_URL`/`POSTGRES_USER`/`POSTGRES_DB` do `.env`
+via `set -a; source .env; set +a`. Ambos **detectam automaticamente** se o Postgres está
+rodando via Docker Compose (`docker compose ps -q postgres`) — nesse caso rodam
+`pg_dump`/`psql` **de dentro do container** (`docker compose exec -T postgres ...`), já que
+o serviço `postgres` do compose não expõe porta pro host (só existe na rede interna
+`internal`; `DATABASE_URL` com host `postgres` não resolveria fora dos containers). Fora do
+Docker (PM2 + Postgres local/gerenciado), usam `pg_dump`/`psql` direto no host, como antes.
 
 ---
 
@@ -669,8 +706,8 @@ executável não sobrevive a um `git` rodando no Windows).
 
 - Cardápio público com categorias, busca por adicionais/observações/quantidade no modal
   de produto.
-- Checkout do site (entrega com bairro/taxa, retirada, Pix/dinheiro/cartão, troco, opt-in
-  de nota fiscal com CPF/CNPJ).
+- Checkout do site (entrega com bairro/taxa, retirada, Pix/dinheiro/cartão/Combinar pelo
+  WhatsApp, troco, opt-in de nota fiscal com CPF/CNPJ).
 - Criação de pedido com recomputação de preço no servidor, numeração sequencial segura
   contra concorrência.
 - Painel admin: Kanban com concorrência otimista, alerta sonoro de pedido novo, produtos,
@@ -727,6 +764,36 @@ Ver `git log --oneline` no repositório pra mensagens de commit detalhadas de ca
 Lista de todos os bugs reais encontrados e corrigidos nesta sessão (por testes reais e/ou
 auditoria de código), do mais recente ao mais antigo:
 
+- **Crítico** — `prisma/seed.ts`: `seedCatalog()` apagava incondicionalmente **todos** os
+  `OrderItem`/`OrderItemAddon`/produtos/categorias antes de recriar o cardápio, toda vez
+  que o seed rodava. Como `scripts/install.sh` roda o seed sempre que é executado,
+  reexecutar `install.sh` por engano num sistema já em produção apagaria histórico de
+  pedidos reais e todo o trabalho manual de NCM/CFOP/CSOSN feito produto a produto —
+  corrigido: agora aborta se já existir qualquer `Order` no banco, e pula o reseed do
+  catálogo (sem apagar nada) se já existir alguma `Category`, a menos que
+  `SEED_FORCE_CATALOG=true` seja definido explicitamente.
+- **Alto** — `Dockerfile`: container rodava como usuário não-root dedicado (`nextjs`), mas
+  `certs/` e `public/uploads/` são bind mounts do host (`docker-compose.yml`) — o UID do
+  usuário dentro do container quase nunca bate com o dono desses arquivos no host, o que
+  bloquearia silenciosamente a leitura do certificado A1 e a escrita de fotos de produto
+  enviadas pelo admin. Corrigido: container agora roda como root (mesmo modelo de
+  confiança do deploy via PM2, onde o processo já roda com o usuário que o inicia no
+  host).
+- **Alto** — `scripts/backup.sh`/`restore.sh`: chamavam `pg_dump`/`psql` diretamente no
+  host usando `DATABASE_URL` — mas o serviço `postgres` do `docker-compose.yml` não expõe
+  porta pro host (só existe na rede interna do compose), então o host `postgres` da URL
+  nunca resolveria fora dos containers. Os scripts simplesmente não funcionavam no deploy
+  via Docker. Corrigido: os dois agora detectam automaticamente Postgres rodando via
+  Docker Compose e executam `pg_dump`/`psql` de dentro do container.
+- **Alto** — `docker-compose.yml`: o serviço `nginx` não montava nenhum volume em
+  `/var/www/certbot`, mas `nginx/default.conf` serve o desafio ACME HTTP-01 exatamente
+  desse caminho — a emissão de certificado HTTPS pelo certbot sempre falharia no deploy
+  via Docker Compose. Corrigido: adicionado volume `./nginx/webroot:/var/www/certbot` e
+  um serviço `certbot` sob demanda (perfil `tools`) com o comando pronto documentado em
+  §22.
+- `certs/README.md`/HANDOFF §23: instrução pedia `chmod 600` no certificado A1, o que
+  também quebraria a leitura no deploy via Docker pelo mesmo motivo do UID acima —
+  trocado para `chmod 644`.
 - **Crítico** — `Dockerfile`: estágio final não copiava as dependências do CLI do Prisma
   (`dotenv`, `c12`, `effect`, `deepmerge-ts`, `empathic`) nem `prisma.config.ts` — o
   container entraria em **crash-loop** ao tentar `prisma migrate deploy` no start.
@@ -858,19 +925,28 @@ crontab -e
 ### Opção B — Docker Compose
 
 ```bash
-sudo apt update && sudo apt install -y docker.io docker-compose-plugin certbot
+sudo apt update && sudo apt install -y docker.io docker-compose-plugin
 git clone <seu-repo> rute-lanches && cd rute-lanches
 cp .env.production.example .env
 nano .env
 chmod +x scripts/*.sh
-# certificado real em certs/certificado.pfx
+# certificado real em certs/certificado.pfx (chmod 644 — ver certs/README.md)
 
 docker compose build
 docker compose up -d
 docker compose exec app npx tsx prisma/seed.ts   # só na primeira vez
 
-# HTTPS: apontar DNS, rodar certbot no host (ou container dedicado), descomentar
-# o bloco 443 em nginx/default.conf, `docker compose restart nginx`
+# HTTPS (depois de apontar o DNS pro servidor): emitir o certificado via o
+# serviço "certbot" do próprio compose (sem precisar instalar certbot no host)
+docker compose run --rm certbot certonly --webroot -w /var/www/certbot \
+  -d seu-dominio.com.br -d www.seu-dominio.com.br \
+  --email seu-email@exemplo.com --agree-tos --no-eff-email
+# Editar nginx/default.conf: trocar "seu-dominio.com.br" pelo domínio real e
+# descomentar o bloco "server { listen 443 ssl; ... }"
+docker compose restart nginx
+
+# Renovação (repetir a cada ~60 dias, ou agendar no cron do host):
+#   docker compose run --rm certbot renew && docker compose restart nginx
 ```
 
 ### Depois do primeiro deploy (ambas opções)
@@ -905,7 +981,9 @@ docker compose exec app npx tsx prisma/seed.ts   # só na primeira vez
 
 ### Certificado A1
 1. Copiar o arquivo `.pfx`/`.p12` real para `certs/certificado.pfx` no servidor.
-2. `chmod 600 certs/certificado.pfx`.
+2. `chmod 644 certs/certificado.pfx` (não use `600` — quebra a leitura no
+   deploy via Docker, onde o container lê o arquivo com um usuário próprio,
+   `nextjs`, de UID diferente do dono do arquivo no host).
 3. Preencher `FISCAL_CERTIFICADO_SENHA` no `.env` com a senha real do certificado.
 4. Reiniciar a aplicação e checar os logs — deve aparecer algo como "Certificado A1
    enviado ao provider fiscal com sucesso". Se aparecer erro, a mensagem já indica o que
