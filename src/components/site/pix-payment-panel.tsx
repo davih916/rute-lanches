@@ -49,7 +49,23 @@ export function PixPaymentPanel({ orderId }: { orderId: string }) {
 
   async function handleCopy() {
     if (!charge?.qrCodeText) return;
-    await navigator.clipboard.writeText(charge.qrCodeText);
+
+    // navigator.clipboard só existe em contexto seguro (HTTPS/localhost) —
+    // numa implantação recém-feita ainda em http://IP, ele não existe e
+    // lançaria um erro. Fallback com execCommand cobre esse caso.
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(charge.qrCodeText);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = charge.qrCodeText;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }

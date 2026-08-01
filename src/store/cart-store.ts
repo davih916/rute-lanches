@@ -33,6 +33,21 @@ export interface CartState {
 
 export type CartStoreHook = UseBoundStore<StoreApi<CartState>>;
 
+/**
+ * `crypto.randomUUID()` só existe em contexto seguro (HTTPS/localhost) — numa
+ * implantação recém-feita sem domínio/certificado ainda (só `http://IP`), ele
+ * não existe e quebra silenciosamente o "adicionar ao carrinho" (a função
+ * nem aparece, então nenhum erro chega a aparecer pro usuário). O id só
+ * precisa ser único dentro do carrinho local, não precisa ser
+ * criptograficamente forte, então um fallback simples resolve.
+ */
+function generateCartItemId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function cartItemLineTotal(item: CartItem): number {
   const addonsTotal = item.addons.reduce((sum, a) => sum + a.priceCents, 0);
   return (item.unitPriceCents + addonsTotal) * item.quantity;
@@ -54,7 +69,7 @@ export function createCartStore(persistKey: string): CartStoreHook {
           set((state) => ({
             items: [
               ...state.items,
-              { ...item, cartItemId: crypto.randomUUID() },
+              { ...item, cartItemId: generateCartItemId() },
             ],
           })),
         removeItem: (cartItemId) =>
