@@ -163,6 +163,12 @@ model DeliveryZone {
   neighborhood String   @unique
   feeCents     Int
   active       Boolean  @default(true)
+  // Bairros reais (área de entrega) ficam visíveis no checkout do site. Zonas
+  // criadas só pra registrar um endereço/cliente específico com taxa
+  // combinada à parte (ex: "Casa da Dona Maria nº222") ficam com
+  // visibleToCustomers=false — continuam disponíveis pro admin usar na Venda
+  // no Balcão, mas não aparecem no dropdown público de bairros.
+  visibleToCustomers Boolean @default(true)
   order        Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

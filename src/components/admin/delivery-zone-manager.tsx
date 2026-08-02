@@ -13,6 +13,7 @@ interface DeliveryZoneRow {
   neighborhood: string;
   feeCents: number;
   active: boolean;
+  visibleToCustomers: boolean;
   orderCount: number;
 }
 
@@ -21,6 +22,7 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [neighborhood, setNeighborhood] = useState("");
   const [fee, setFee] = useState("");
+  const [visibleToCustomers, setVisibleToCustomers] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -28,6 +30,7 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
     setEditingId(null);
     setNeighborhood("");
     setFee("");
+    setVisibleToCustomers(true);
     setError(null);
     setModalOpen(true);
   }
@@ -36,6 +39,7 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
     setEditingId(zone.id);
     setNeighborhood(zone.neighborhood);
     setFee((zone.feeCents / 100).toFixed(2));
+    setVisibleToCustomers(zone.visibleToCustomers);
     setError(null);
     setModalOpen(true);
   }
@@ -52,7 +56,7 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
       const res = await fetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ neighborhood, feeCents: reaisToCents(fee) }),
+        body: JSON.stringify({ neighborhood, feeCents: reaisToCents(fee), visibleToCustomers }),
       });
       const data = await res.json();
 
@@ -98,8 +102,10 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
         <div>
           <p className="font-semibold text-neutral-900">Bairros e taxa de entrega</p>
           <p className="text-sm text-neutral-500">
-            Só bairros ativos aparecem no checkout. Sem nenhum bairro cadastrado, só
-            retirada fica disponível para o cliente.
+            Só bairros ativos e marcados como &ldquo;Visível pro cliente&rdquo; aparecem no
+            checkout do site. Sem nenhum bairro cadastrado, só retirada fica disponível
+            para o cliente. Bairros &ldquo;Só admin&rdquo; (ex: endereço específico com taxa
+            combinada à parte) continuam disponíveis na Venda no Balcão.
           </p>
         </div>
         <Button type="button" size="sm" onClick={openCreate}>
@@ -114,6 +120,7 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
               <th className="px-4 py-3">Bairro</th>
               <th className="px-4 py-3">Taxa</th>
               <th className="px-4 py-3">Status</th>
+              <th className="px-4 py-3">Visibilidade</th>
               <th className="px-4 py-3 w-40"></th>
             </tr>
           </thead>
@@ -129,6 +136,17 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
                     }
                   >
                     {zone.active ? "Ativo" : "Inativo"}
+                  </Badge>
+                </td>
+                <td className="px-4 py-2.5">
+                  <Badge
+                    className={
+                      zone.visibleToCustomers
+                        ? "bg-blue-50 text-blue-700"
+                        : "bg-amber-50 text-amber-700"
+                    }
+                  >
+                    {zone.visibleToCustomers ? "Visível pro cliente" : "Só admin"}
                   </Badge>
                 </td>
                 <td className="px-4 py-2.5">
@@ -158,7 +176,7 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
             ))}
             {zones.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-6 text-center text-sm text-neutral-400">
+                <td colSpan={5} className="px-4 py-6 text-center text-sm text-neutral-400">
                   Nenhum bairro cadastrado ainda.
                 </td>
               </tr>
@@ -186,6 +204,23 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
             onChange={(e) => setFee(e.target.value)}
             required
           />
+          <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-neutral-200 px-3 py-2.5">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 rounded border-neutral-300"
+              checked={visibleToCustomers}
+              onChange={(e) => setVisibleToCustomers(e.target.checked)}
+            />
+            <span className="text-sm text-neutral-700">
+              <span className="font-medium">Visível para o cliente no site</span>
+              <br />
+              <span className="text-xs text-neutral-500">
+                Desmarque para bairros de uso interno (ex: endereço específico de um
+                cliente com taxa combinada à parte) — continua disponível na Venda no
+                Balcão, mas some do checkout público.
+              </span>
+            </span>
+          </label>
           {error && <p className="text-sm font-medium text-red-600">{error}</p>}
           <Button type="submit" loading={submitting}>
             {editingId ? "Salvar" : "Criar bairro"}

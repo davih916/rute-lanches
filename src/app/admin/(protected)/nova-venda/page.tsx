@@ -1,7 +1,7 @@
 import { getSettingsSafe } from "@/lib/services/settings-service";
 import { isStoreOpenNow } from "@/lib/opening-hours";
 import { parseAcceptedPaymentMethods } from "@/lib/constants";
-import { listActiveDeliveryZones } from "@/lib/services/delivery-zone-service";
+import { listActiveDeliveryZonesForStaff } from "@/lib/services/delivery-zone-service";
 import { listActiveCategoriesWithProducts } from "@/lib/services/category-service";
 import { NovaVendaScreen } from "@/components/admin/nova-venda-screen";
 import type { CategoryView } from "@/lib/types";
@@ -9,7 +9,7 @@ import type { CategoryView } from "@/lib/types";
 /** Sem bairros cadastrados/banco indisponível, oferece só balcão/retirada (mesmo padrão do checkout do site). */
 async function listActiveDeliveryZonesSafe() {
   try {
-    return await listActiveDeliveryZones();
+    return await listActiveDeliveryZonesForStaff();
   } catch (error) {
     console.error("[nova-venda] Falha ao carregar bairros de entrega — usando lista vazia.", error);
     return [];

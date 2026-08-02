@@ -4,8 +4,9 @@
 > conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
 > algo mudar de forma relevante, atualize este arquivo.
 >
-> Última atualização: 2026-07-28 (nova forma de pagamento "Combinar pelo WhatsApp" no
-> checkout — ver §6). Atualização anterior (2026-07-15): auditoria da infraestrutura de
+> Última atualização: 2026-08-01 (bairros com visibilidade admin-only — ver §7 abaixo).
+> Atualização anterior (2026-07-28): forma de pagamento "Combinar pelo WhatsApp" no
+> checkout — ver §6. Atualização anterior a essa (2026-07-15): auditoria da infraestrutura de
 > deploy, sem alteração de funcionalidades.
 
 ---
@@ -252,7 +253,7 @@ PagBankConfig      (singleton, id fixo "default")
 | `Cliente` / `ClienteUsuario` | empresas assinantes do portal B2B | **não é o consumidor final** — ver §8 |
 | `Category` / `Product` / `ProductAddon` | cardápio | `Product` tem `ncm`/`cfop`/`csosnCst`/`unidadeComercial` opcionais (fiscal) |
 | `Customer` | consumidor final (quem faz o pedido) | `phone` é `@unique` — usado como chave de upsert |
-| `DeliveryZone` | bairro + taxa de entrega | só usado quando `deliveryType = "entrega"` |
+| `DeliveryZone` | bairro + taxa de entrega | só usado quando `deliveryType = "entrega"`; `visibleToCustomers=false` esconde do checkout público (usado pra endereço específico de cliente com taxa combinada à parte — ver §7) |
 | `Order` | pedido | `status` (kanban), `paymentStatus` (Pix), `deliveryType`, `wantsInvoice`, `paymentMethod` |
 | `OrderItem` / `OrderItemAddon` | itens do pedido | snapshot de nome/preço no momento da compra |
 | `OrderStatusHistory` | auditoria de mudança de status | |
@@ -416,6 +417,19 @@ Kanban, emissão fiscal automática e impressão automática do §6
 Se Pix: mostra o PixPaymentPanel inline na própria tela (pra exibir o QR no balcão)
 Se não-Pix: mostra "Venda registrada!" + botões "Nova venda" / "Ver pedidos"
 ```
+
+### Bairros "só admin" (`DeliveryZone.visibleToCustomers`)
+
+A Venda no Balcão usa `listActiveDeliveryZonesForStaff()` (todos os bairros ativos),
+diferente do checkout do site, que usa `listActiveDeliveryZones()` (só
+`visibleToCustomers=true`). Isso permite cadastrar em Configurações → "Bairros e taxa de
+entrega" zonas de uso interno — ex: o endereço específico de um cliente fixo com taxa
+combinada à parte (`"Casa da Dona Maria nº222"`, taxa mais alta) — sem que isso apareça
+como opção pra qualquer cliente no checkout público. Basta desmarcar "Visível para o
+cliente no site" ao criar/editar o bairro. A restrição de área de entrega (ex: só
+Aparecidinha até o Éden, em Sorocaba) é feita da mesma forma: cadastre só os bairros
+reais dentro da área desejada como `visibleToCustomers=true` — o cliente só consegue
+escolher entre os bairros que existem na lista, não tem campo de texto livre.
 
 ---
 

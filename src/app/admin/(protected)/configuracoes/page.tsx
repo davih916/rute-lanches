@@ -27,6 +27,7 @@ export default async function AdminConfiguracoesPage() {
             neighborhood: zone.neighborhood,
             feeCents: zone.feeCents,
             active: zone.active,
+            visibleToCustomers: zone.visibleToCustomers,
             orderCount: zone._count.orders,
           }))}
         />

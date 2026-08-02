@@ -19,8 +19,21 @@ export async function listDeliveryZonesForAdmin() {
   });
 }
 
-/** Usado pelo checkout público — só bairros ativos, ordenados por nome. */
+/** Usado pelo checkout público — só bairros ativos E visíveis pro cliente, ordenados por nome. */
 export async function listActiveDeliveryZones() {
+  return prisma.deliveryZone.findMany({
+    where: { active: true, visibleToCustomers: true },
+    orderBy: { neighborhood: "asc" },
+  });
+}
+
+/**
+ * Usado pela Venda no Balcão (admin) — todos os bairros ativos, incluindo os
+ * marcados como "só admin" (ex: endereço específico de um cliente com taxa
+ * combinada à parte). Diferente de `listActiveDeliveryZones`, que o site
+ * público usa e não deve mostrar essas entradas.
+ */
+export async function listActiveDeliveryZonesForStaff() {
   return prisma.deliveryZone.findMany({
     where: { active: true },
     orderBy: { neighborhood: "asc" },
@@ -40,6 +53,7 @@ export async function createDeliveryZone(input: CreateDeliveryZoneInput) {
     data: {
       neighborhood: input.neighborhood,
       feeCents: input.feeCents,
+      visibleToCustomers: input.visibleToCustomers ?? true,
       order: (maxOrder._max.order ?? -1) + 1,
     },
   });
