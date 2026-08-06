@@ -267,25 +267,52 @@ export async function markOrderPrinted(orderId: string): Promise<OrderWithRelati
   });
 }
 
+export interface TopProduct {
+  productId: string;
+  name: string;
+  quantity: number;
+}
+
 export interface TodayStats {
   orderCount: number;
   revenueCents: number;
   averageTicketCents: number;
+  /** Pedidos ainda em andamento (não entregues nem cancelados) — de qualquer dia, não só hoje. */
+  pendingOrders: number;
+  /** Top 5 produtos por quantidade vendida hoje. */
+  topProducts: TopProduct[];
 }
 
-/** Estatísticas simples do dia para a tela inicial do admin. Cancelados não contam como venda. */
+/** Estatísticas da tela inicial do admin. Cancelados não contam como venda. */
 export async function getTodayStats(): Promise<TodayStats> {
   const startOfToday = new Date();
   startOfToday.setHours(0, 0, 0, 0);
 
-  const orders = await prisma.order.findMany({
-    where: { createdAt: { gte: startOfToday }, status: { not: "cancelado" } },
-    select: { totalCents: true },
-  });
+  const [orders, pendingOrders, topItems] = await Promise.all([
+    prisma.order.findMany({
+      where: { createdAt: { gte: startOfToday }, status: { not: "cancelado" } },
+      select: { totalCents: true },
+    }),
+    prisma.order.count({
+      where: { status: { notIn: ["entregue", "cancelado"] } },
+    }),
+    prisma.orderItem.groupBy({
+      by: ["productId", "productName"],
+      where: { order: { createdAt: { gte: startOfToday }, status: { not: "cancelado" } } },
+      _sum: { quantity: true },
+      orderBy: { _sum: { quantity: "desc" } },
+      take: 5,
+    }),
+  ]);
 
   const orderCount = orders.length;
   const revenueCents = orders.reduce((sum, o) => sum + o.totalCents, 0);
   const averageTicketCents = orderCount > 0 ? Math.round(revenueCents / orderCount) : 0;
+  const topProducts: TopProduct[] = topItems.map((item) => ({
+    productId: item.productId,
+    name: item.productName,
+    quantity: item._sum.quantity ?? 0,
+  }));
 
-  return { orderCount, revenueCents, averageTicketCents };
+  return { orderCount, revenueCents, averageTicketCents, pendingOrders, topProducts };
 }

@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Plus, Pencil, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,6 +17,7 @@ interface CategoryRow {
 }
 
 export function CategoryManager({ categories }: { categories: CategoryRow[] }) {
+  const router = useRouter();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -59,7 +62,8 @@ export function CategoryManager({ categories }: { categories: CategoryRow[] }) {
 
       setModalOpen(false);
       setSubmitting(false);
-      window.location.reload();
+      toast.success(editingId ? "Categoria atualizada." : "Categoria criada.");
+      router.refresh();
     } catch {
       setError("Falha de conexão.");
       setSubmitting(false);
@@ -67,12 +71,17 @@ export function CategoryManager({ categories }: { categories: CategoryRow[] }) {
   }
 
   async function handleToggleActive(category: CategoryRow) {
-    await fetch(`/api/categories/${category.id}`, {
+    const res = await fetch(`/api/categories/${category.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active: !category.active }),
     });
-    window.location.reload();
+    if (!res.ok) {
+      toast.error("Não foi possível atualizar a categoria.");
+      return;
+    }
+    toast.success(category.active ? "Categoria desativada." : "Categoria ativada.");
+    router.refresh();
   }
 
   async function handleDelete(category: CategoryRow) {
@@ -81,10 +90,11 @@ export function CategoryManager({ categories }: { categories: CategoryRow[] }) {
     const res = await fetch(`/api/categories/${category.id}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
-      alert(data?.error ?? "Não foi possível excluir esta categoria.");
+      toast.error(data?.error ?? "Não foi possível excluir esta categoria.");
       return;
     }
-    window.location.reload();
+    toast.success("Categoria excluída.");
+    router.refresh();
   }
 
   return (

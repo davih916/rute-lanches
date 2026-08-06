@@ -4,10 +4,11 @@
 > conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
 > algo mudar de forma relevante, atualize este arquivo.
 >
-> Última atualização: 2026-08-01 (bairros com visibilidade admin-only — ver §7 abaixo).
-> Atualização anterior (2026-07-28): forma de pagamento "Combinar pelo WhatsApp" no
-> checkout — ver §6. Atualização anterior a essa (2026-07-15): auditoria da infraestrutura de
-> deploy, sem alteração de funcionalidades.
+> Última atualização: 2026-08-03 (leva do painel admin: dashboard com estatísticas, busca/
+> filtros no Kanban, toasts, animações, sidebar responsiva no celular — ver §9.1). Atualização
+> anterior (2026-08-01): bairros com visibilidade admin-only — ver §7. Anterior a essa
+> (2026-07-28): forma de pagamento "Combinar pelo WhatsApp" — ver §6. Anterior a essa
+> (2026-07-15): auditoria da infraestrutura de deploy, sem alteração de funcionalidades.
 
 ---
 
@@ -117,6 +118,8 @@ route.ts (API)  ──▶  services (src/lib/services/*)  ──▶  Prisma  ─
 | Hash de senha | bcryptjs | ^3.0.3 |
 | Certificado A1 (parse PKCS12) | node-forge | ^1.4.0 |
 | Ícones | lucide-react | ^1.23.0 |
+| Animações | framer-motion | ^13.0.0 |
+| Toasts | sonner | ^2.0.7 |
 | Processo em produção (sem Docker) | PM2 | (instalado no VPS) |
 | Containers (opcional) | Docker + Docker Compose | — |
 | Proxy reverso | Nginx | 1.27 (imagem Docker) / apt (bare-metal) |
@@ -477,6 +480,47 @@ Sidebar (src/components/admin/sidebar.tsx):
 **Não existe mais tela "Fiscal"** no admin (removida nesta sessão — ver §11/§18/§20).
 Emissão de nota por pedido continua existindo via `FiscalAction`
 (`src/components/admin/fiscal-action.tsx`), dentro do card do pedido no Kanban.
+
+### 9.1 Leva de melhorias de UI/UX do painel (2026-08-03)
+
+- **Dashboard com mais estatísticas** (`today-stats.tsx` + `getTodayStats()` em
+  `order-service.ts`): além de pedidos/faturamento/ticket médio do dia, agora mostra
+  **pedidos em aberto** (qualquer dia, não só hoje) e **top 5 produtos mais vendidos hoje**
+  (via `prisma.orderItem.groupBy`).
+- **Busca e filtros no Kanban** (`kanban-board.tsx`): campo de busca (nome/telefone/número
+  do pedido) e chips de filtro por tipo de entrega — filtragem 100% client-side sobre os
+  pedidos já carregados, não afeta o polling nem o alerta sonoro (que continuam olhando
+  a lista **completa**, não a filtrada).
+- **Toasts** (`sonner`, montado em `src/app/providers.tsx`): substituíram `window.alert`/
+  mensagens inline de sucesso/erro em `product-manager`, `category-manager`,
+  `delivery-zone-manager`, `settings-form`, `pagbank-config-form`,
+  `change-password-form` e o conflito de status do Kanban.
+- **`router.refresh()` no lugar de `window.location.reload()`** nesses mesmos formulários —
+  atualiza os dados do Server Component sem recarregar a página inteira (mais rápido, sem
+  flash branco na tela).
+- **Animações com `framer-motion`**: `Modal` (`src/components/ui/modal.tsx`) agora anima
+  entrada/saída de verdade (antes só tinha CSS de entrada, saía sem transição); cards do
+  Kanban entram/saem com `AnimatePresence`; a sidebar mobile é uma gaveta animada.
+- **Sidebar responsiva** (`sidebar.tsx`): em telas pequenas vira uma barra superior com
+  hamburger + gaveta deslizante (antes era uma coluna fixa de 240px sempre visível,
+  inutilizável no celular). O layout admin (`(protected)/layout.tsx`) mudou de
+  `min-h-screen`/`h-screen` fixo em cada página para uma cadeia `h-screen` → `flex-1
+  overflow-y-auto` no `<main>`, então páginas internas usam `h-full` (não `h-screen`
+  diretamente) para não estourar a viewport quando a barra mobile está visível.
+- **Busca de produtos** (`product-manager.tsx`) e **toggle rápido de ativo/inativo** direto
+  na listagem (antes só existia em categorias/bairros, não em produtos).
+- **Code-splitting**: `ProductModal`, `PixPaymentPanel`, `WhatsAppOrderPanel` e
+  `FiscalAction` viraram `next/dynamic` — cada um só entra no bundle do cliente quando
+  realmente é usado (ex: `FiscalAction` só quando um pedido está "Entregue"), em vez de
+  todo card do Kanban ou todo produto do cardápio carregar esse JS de cara.
+- **Bug corrigido**: `Fiscal.status = "emitindo"` (estado transitório usado pra evitar
+  NFC-e duplicada, ver §11) não estava mapeado em `FISCAL_STATUS_LABELS`/`STATUS_STYLES` —
+  o card mostrava literalmente "undefined" nesse status. `FiscalStatus` agora inclui
+  `"emitindo"` como um label válido (fora de `FISCAL_STATUSES`, que continua só com os 3
+  valores "configuráveis").
+- **Bug corrigido**: botão "Cancelar pedido" no card do Kanban não pedia nenhuma
+  confirmação — um clique acidental cancelava o pedido na hora. Agora pede confirmação,
+  igual às outras ações destrutivas do painel.
 
 ---
 

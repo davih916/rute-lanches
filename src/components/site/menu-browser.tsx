@@ -1,10 +1,16 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { CategoryNav } from "@/components/site/category-nav";
 import { ProductCard } from "@/components/site/product-card";
-import { ProductModal } from "@/components/site/product-modal";
 import type { CategoryView, ProductView } from "@/lib/types";
+
+// Só é montado quando o cliente abre um produto — tira o modal (com todos os
+// campos de adicionais/observações) do JS inicial do cardápio.
+const ProductModal = dynamic(() =>
+  import("@/components/site/product-modal").then((m) => m.ProductModal)
+);
 
 interface MenuBrowserProps {
   categories: CategoryView[];

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { CheckCircle2 } from "lucide-react";
 import { getOrderById } from "@/lib/services/order-service";
 import { getSettingsSafe } from "@/lib/services/settings-service";
@@ -11,9 +12,16 @@ import {
   type OrderStatus,
 } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
-import { PixPaymentPanel } from "@/components/site/pix-payment-panel";
-import { WhatsAppOrderPanel } from "@/components/site/whatsapp-order-panel";
 import { orderToWhatsAppSummary } from "@/lib/whatsapp";
+
+// Só um dos dois é usado por pedido (conforme a forma de pagamento) — divide
+// o JS em partes carregadas sob demanda em vez de sempre entrar no bundle.
+const PixPaymentPanel = dynamic(() =>
+  import("@/components/site/pix-payment-panel").then((m) => m.PixPaymentPanel)
+);
+const WhatsAppOrderPanel = dynamic(() =>
+  import("@/components/site/whatsapp-order-panel").then((m) => m.WhatsAppOrderPanel)
+);
 
 export default async function OrderConfirmationPage({
   params,

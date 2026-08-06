@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -28,6 +30,7 @@ interface SettingsFormProps {
 }
 
 export function SettingsForm({ settings }: SettingsFormProps) {
+  const router = useRouter();
   const [storeName, setStoreName] = useState(settings.storeName);
   const [primaryColor, setPrimaryColor] = useState(settings.primaryColor);
   const [secondaryColor, setSecondaryColor] = useState(settings.secondaryColor);
@@ -57,14 +60,12 @@ export function SettingsForm({ settings }: SettingsFormProps) {
   }
 
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setMessage(null);
 
     if (acceptedPaymentMethods.length === 0) {
-      setMessage({ type: "error", text: "Selecione ao menos uma forma de pagamento." });
+      toast.error("Selecione ao menos uma forma de pagamento.");
       return;
     }
 
@@ -91,17 +92,17 @@ export function SettingsForm({ settings }: SettingsFormProps) {
       const data = await res.json();
 
       if (!res.ok) {
-        setMessage({ type: "error", text: data.error ?? "Erro ao salvar." });
+        toast.error(data.error ?? "Erro ao salvar.");
         setSubmitting(false);
         return;
       }
 
-      setMessage({ type: "success", text: "Configurações salvas com sucesso." });
+      toast.success("Configurações salvas com sucesso.");
       setSubmitting(false);
-      // Recarrega para refletir cores/nome atualizados em toda a aplicação.
-      window.location.reload();
+      // Atualiza os dados do servidor (cores/nome refletem em toda a aplicação) sem recarregar a página inteira.
+      router.refresh();
     } catch {
-      setMessage({ type: "error", text: "Falha de conexão." });
+      toast.error("Falha de conexão.");
       setSubmitting(false);
     }
   }
@@ -287,16 +288,6 @@ export function SettingsForm({ settings }: SettingsFormProps) {
           ))}
         </Select>
       </div>
-
-      {message && (
-        <p
-          className={`text-sm font-medium ${
-            message.type === "success" ? "text-emerald-600" : "text-red-600"
-          }`}
-        >
-          {message.text}
-        </p>
-      )}
 
       <Button type="submit" size="lg" loading={submitting} className="w-full sm:w-fit">
         Salvar configurações

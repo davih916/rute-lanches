@@ -9,8 +9,8 @@ export default async function AdminDashboardPage() {
   const [orders, stats] = await Promise.all([listOrders(), getTodayStats()]);
 
   return (
-    <div className="flex h-screen flex-col">
-      <header className="flex items-center justify-between border-b border-neutral-200 bg-white px-6 py-4">
+    <div className="flex h-full flex-col">
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 bg-white px-6 py-4">
         <div>
           <h1 className="text-lg font-bold text-neutral-900">Pedidos</h1>
           <p className="text-sm text-neutral-500">Atualiza automaticamente a cada 5 segundos.</p>
@@ -23,7 +23,7 @@ export default async function AdminDashboardPage() {
         </Link>
       </header>
       <TodayStatsBar stats={stats} />
-      <div className="flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <KanbanBoard initialOrders={orders} />
       </div>
     </div>

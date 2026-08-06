@@ -1,7 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Plus, Pencil, Trash2 } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Plus, Pencil, Trash2, Search } from "lucide-react";
+import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -65,6 +67,7 @@ export function ProductManager({
   products: ProductRow[];
   categories: CategoryOption[];
 }) {
+  const router = useRouter();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<ProductForm>(() => emptyForm(categories[0]?.id ?? ""));
@@ -73,6 +76,15 @@ export function ProductManager({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [imageError, setImageError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  const filteredProducts = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return products;
+    return products.filter(
+      (p) => p.name.toLowerCase().includes(term) || p.categoryName.toLowerCase().includes(term)
+    );
+  }, [products, search]);
 
   function openCreate() {
     setEditingId(null);
@@ -177,11 +189,26 @@ export function ProductManager({
 
       setModalOpen(false);
       setSubmitting(false);
-      window.location.reload();
+      toast.success(editingId ? "Produto atualizado." : "Produto criado.");
+      router.refresh();
     } catch {
       setError("Falha de conexão.");
       setSubmitting(false);
     }
+  }
+
+  async function handleToggleActive(product: ProductRow) {
+    const res = await fetch(`/api/products/${product.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ active: !product.active }),
+    });
+    if (!res.ok) {
+      toast.error("Não foi possível atualizar o produto.");
+      return;
+    }
+    toast.success(product.active ? "Produto desativado." : "Produto ativado.");
+    router.refresh();
   }
 
   async function handleDelete(product: ProductRow) {
@@ -190,19 +217,34 @@ export function ProductManager({
     const res = await fetch(`/api/products/${product.id}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
-      alert(data?.error ?? "Não foi possível excluir este produto.");
+      toast.error(data?.error ?? "Não foi possível excluir este produto.");
       return;
     }
-    window.location.reload();
+    toast.success("Produto excluído.");
+    router.refresh();
   }
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-neutral-500">{products.length} produtos cadastrados</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-neutral-500">
+          {search ? `${filteredProducts.length} de ${products.length}` : products.length} produtos
+          cadastrados
+        </p>
         <Button size="sm" onClick={openCreate}>
           <Plus className="size-4" /> Novo produto
         </Button>
+      </div>
+
+      <div className="relative max-w-sm">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Buscar produto por nome ou categoria..."
+          className="h-10 w-full rounded-lg border border-neutral-300 bg-white pl-9 pr-3.5 text-sm outline-none focus:border-[var(--brand-primary)] focus:ring-2 focus:ring-[var(--brand-primary)]/20"
+        />
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-neutral-200 bg-white">
@@ -214,17 +256,24 @@ export function ProductManager({
               <th className="px-4 py-3">Categoria</th>
               <th className="px-4 py-3">Preço</th>
               <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3 w-32"></th>
+              <th className="px-4 py-3 w-40"></th>
             </tr>
           </thead>
           <tbody>
-            {products.map((product) => (
+            {filteredProducts.length === 0 && (
+              <tr>
+                <td colSpan={6} className="px-4 py-8 text-center text-sm text-neutral-400">
+                  Nenhum produto encontrado para &ldquo;{search}&rdquo;.
+                </td>
+              </tr>
+            )}
+            {filteredProducts.map((product) => (
               <tr key={product.id} className="border-b border-neutral-50 last:border-0">
                 <td className="px-4 py-2.5">
                   <div className="relative size-9 overflow-hidden rounded-md border border-neutral-200 bg-neutral-50">
                     {product.imageUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={product.imageUrl} alt="" className="size-full object-cover" />
+                      <img src={product.imageUrl} alt="" loading="lazy" className="size-full object-cover" />
                     ) : (
                       <div className="flex size-full items-center justify-center text-sm">🍔</div>
                     )}
@@ -255,6 +304,9 @@ export function ProductManager({
                     >
                       <Pencil className="size-4" />
                     </button>
+                    <Button size="sm" variant="outline" onClick={() => handleToggleActive(product)}>
+                      {product.active ? "Desativar" : "Ativar"}
+                    </Button>
                     <button
                       onClick={() => handleDelete(product)}
                       aria-label="Excluir"

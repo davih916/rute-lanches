@@ -13,6 +13,7 @@ interface FiscalActionProps {
 
 const STATUS_STYLES: Record<FiscalStatus, string> = {
   aguardando_emissao: "bg-neutral-100 text-neutral-600",
+  emitindo: "bg-blue-50 text-blue-700",
   emitida: "bg-emerald-50 text-emerald-700",
   erro: "bg-red-50 text-red-700",
 };
@@ -61,6 +62,11 @@ export function FiscalAction({ orderId, fiscal }: FiscalActionProps) {
             <FileText className="size-3.5" />
             Ver DANFCE
           </a>
+        ) : status === "emitindo" ? (
+          <span className="flex items-center gap-1 text-xs font-semibold text-blue-700">
+            <Loader2 className="size-3.5 animate-spin" />
+            Emitindo...
+          </span>
         ) : (
           <button
             onClick={handleIssue}

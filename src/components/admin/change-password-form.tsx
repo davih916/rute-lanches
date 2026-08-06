@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
@@ -9,14 +10,12 @@ export function ChangePasswordForm() {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setMessage(null);
 
     if (newPassword !== confirmPassword) {
-      setMessage({ type: "error", text: "A confirmação não confere com a nova senha." });
+      toast.error("A confirmação não confere com a nova senha.");
       return;
     }
 
@@ -30,7 +29,7 @@ export function ChangePasswordForm() {
       const data = await res.json();
 
       if (!res.ok) {
-        setMessage({ type: "error", text: data.error ?? "Erro ao trocar a senha." });
+        toast.error(data.error ?? "Erro ao trocar a senha.");
         setSubmitting(false);
         return;
       }
@@ -38,10 +37,10 @@ export function ChangePasswordForm() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setMessage({ type: "success", text: "Senha alterada com sucesso." });
+      toast.success("Senha alterada com sucesso.");
       setSubmitting(false);
     } catch {
-      setMessage({ type: "error", text: "Falha de conexão." });
+      toast.error("Falha de conexão.");
       setSubmitting(false);
     }
   }
@@ -81,15 +80,6 @@ export function ChangePasswordForm() {
         minLength={6}
       />
 
-      {message && (
-        <p
-          className={`text-sm font-medium ${
-            message.type === "success" ? "text-emerald-600" : "text-red-600"
-          }`}
-        >
-          {message.text}
-        </p>
-      )}
 
       <Button type="submit" loading={submitting} className="w-fit">
         Alterar senha

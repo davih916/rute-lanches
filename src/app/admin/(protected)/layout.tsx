@@ -18,9 +18,9 @@ export default async function AdminProtectedLayout({ children }: { children: Rea
   const settings = await getSettings();
 
   return (
-    <div className="flex min-h-screen bg-neutral-50">
+    <div className="flex h-screen flex-col bg-neutral-50 md:flex-row">
       <Sidebar adminName={session.name || session.email} storeName={settings.storeName} />
-      <main className="flex-1 overflow-x-hidden">{children}</main>
+      <main className="min-w-0 min-h-0 flex-1 overflow-x-hidden overflow-y-auto">{children}</main>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -19,13 +20,11 @@ export function PagBankConfigForm({ config }: PagBankConfigFormProps) {
 
   const [submitting, setSubmitting] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [testadoEm, setTestadoEm] = useState(config.testadoEm);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
-    setMessage(null);
 
     try {
       const res = await fetch("/api/admin/pagbank/config", {
@@ -36,35 +35,34 @@ export function PagBankConfigForm({ config }: PagBankConfigFormProps) {
       const data = await res.json();
 
       if (!res.ok) {
-        setMessage({ type: "error", text: data.error ?? "Erro ao salvar." });
+        toast.error(data.error ?? "Erro ao salvar.");
         setSubmitting(false);
         return;
       }
 
       setClientSecret("");
       setToken("");
-      setMessage({ type: "success", text: "Configurações do PagBank salvas." });
+      toast.success("Configurações do PagBank salvas.");
       setSubmitting(false);
     } catch {
-      setMessage({ type: "error", text: "Falha de conexão." });
+      toast.error("Falha de conexão.");
       setSubmitting(false);
     }
   }
 
   async function handleTestConnection() {
     setTesting(true);
-    setMessage(null);
     try {
       const res = await fetch("/api/admin/pagbank/testar-conexao", { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
-        setMessage({ type: "error", text: data.error ?? "Erro ao testar conexão." });
+        toast.error(data.error ?? "Erro ao testar conexão.");
       } else {
-        setMessage({ type: "success", text: "Conexão com o PagBank funcionando." });
+        toast.success("Conexão com o PagBank funcionando.");
         setTestadoEm(new Date());
       }
     } catch {
-      setMessage({ type: "error", text: "Falha de conexão." });
+      toast.error("Falha de conexão.");
     } finally {
       setTesting(false);
     }
@@ -113,15 +111,6 @@ export function PagBankConfigForm({ config }: PagBankConfigFormProps) {
         />
       </div>
 
-      {message && (
-        <p
-          className={`text-sm font-medium ${
-            message.type === "success" ? "text-emerald-600" : "text-red-600"
-          }`}
-        >
-          {message.text}
-        </p>
-      )}
 
       <div className="flex flex-wrap gap-3">
         <Button type="submit" size="lg" loading={submitting}>

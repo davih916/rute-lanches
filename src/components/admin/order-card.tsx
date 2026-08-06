@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { Printer, MapPin, Store } from "lucide-react";
 import { formatCentsToBRL } from "@/lib/money";
 import { formatOrderNumber, formatRelativeTime } from "@/lib/format";
@@ -14,8 +15,13 @@ import {
   type DeliveryType,
 } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
-import { FiscalAction } from "@/components/admin/fiscal-action";
 import type { OrderWithRelations } from "@/lib/services/order-service";
+
+// Só é usado quando o pedido está "Entregue" — não precisa entrar no JS
+// inicial do Kanban, que carrega dezenas de cards de uma vez.
+const FiscalAction = dynamic(() =>
+  import("@/components/admin/fiscal-action").then((m) => m.FiscalAction)
+);
 
 interface OrderCardProps {
   order: OrderWithRelations;
@@ -161,6 +167,9 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
         <button
           onClick={(e) => {
             e.stopPropagation();
+            if (!confirm(`Cancelar o pedido ${formatOrderNumber(order.orderNumber)}? Essa ação não pode ser desfeita.`)) {
+              return;
+            }
             onChangeStatus(order.id, "cancelado", status);
           }}
           className="text-center text-sm font-medium text-neutral-400 hover:text-red-500"

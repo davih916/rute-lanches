@@ -92,11 +92,16 @@ export const DELIVERY_TYPE_LABELS: Record<DeliveryType, string> = {
   balcao: "Balcão",
 };
 
+// "emitindo" é um estado transitório (reivindicação atômica pra evitar NFC-e
+// duplicada — ver fiscal-service.ts) que pode aparecer em runtime mesmo não
+// sendo uma opção de filtro/config; por isso está aqui, mas fora de qualquer
+// lista de opções selecionáveis.
 export const FISCAL_STATUSES = ["aguardando_emissao", "emitida", "erro"] as const;
-export type FiscalStatus = (typeof FISCAL_STATUSES)[number];
+export type FiscalStatus = (typeof FISCAL_STATUSES)[number] | "emitindo";
 
 export const FISCAL_STATUS_LABELS: Record<FiscalStatus, string> = {
   aguardando_emissao: "Aguardando emissão",
+  emitindo: "Emitindo...",
   emitida: "Emitida",
   erro: "Erro na emissão",
 };

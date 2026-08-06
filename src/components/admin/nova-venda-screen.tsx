@@ -2,15 +2,21 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { Search, ArrowLeft, CheckCircle2 } from "lucide-react";
 import { ProductCard } from "@/components/site/product-card";
-import { ProductModal } from "@/components/site/product-modal";
 import { CheckoutForm } from "@/components/site/checkout-form";
-import { PixPaymentPanel } from "@/components/site/pix-payment-panel";
 import { Button } from "@/components/ui/button";
 import { useBalcaoCartStore } from "@/store/balcao-cart-store";
 import type { CategoryView, ProductView } from "@/lib/types";
 import type { PaymentMethod } from "@/lib/constants";
+
+const ProductModal = dynamic(() =>
+  import("@/components/site/product-modal").then((m) => m.ProductModal)
+);
+const PixPaymentPanel = dynamic(() =>
+  import("@/components/site/pix-payment-panel").then((m) => m.PixPaymentPanel)
+);
 
 interface DeliveryZoneOption {
   id: string;
@@ -85,8 +91,8 @@ export function NovaVendaScreen({
   }
 
   return (
-    <div className="flex h-screen">
-      <div className="flex w-1/2 flex-col border-r border-neutral-200 p-6">
+    <div className="flex h-full flex-col overflow-y-auto md:flex-row md:overflow-hidden">
+      <div className="flex flex-col border-b border-neutral-200 p-6 md:h-full md:w-1/2 md:border-b-0 md:border-r">
         <div className="mb-4 flex items-center gap-3">
           <Link href="/admin/dashboard" className="text-neutral-400 hover:text-neutral-600">
             <ArrowLeft className="size-5" />
@@ -120,7 +126,7 @@ export function NovaVendaScreen({
         </div>
       </div>
 
-      <div className="w-1/2 overflow-y-auto p-6">
+      <div className="p-6 md:h-full md:w-1/2 md:overflow-y-auto">
         <CheckoutForm
           storeOpen={storeOpen}
           acceptedPaymentMethods={acceptedPaymentMethods}

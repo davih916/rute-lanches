@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Plus, Pencil, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Modal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -18,6 +20,7 @@ interface DeliveryZoneRow {
 }
 
 export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
+  const router = useRouter();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [neighborhood, setNeighborhood] = useState("");
@@ -68,7 +71,8 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
 
       setModalOpen(false);
       setSubmitting(false);
-      window.location.reload();
+      toast.success(editingId ? "Bairro atualizado." : "Bairro criado.");
+      router.refresh();
     } catch {
       setError("Falha de conexão.");
       setSubmitting(false);
@@ -76,12 +80,17 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
   }
 
   async function handleToggleActive(zone: DeliveryZoneRow) {
-    await fetch(`/api/delivery-zones/${zone.id}`, {
+    const res = await fetch(`/api/delivery-zones/${zone.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ active: !zone.active }),
     });
-    window.location.reload();
+    if (!res.ok) {
+      toast.error("Não foi possível atualizar o bairro.");
+      return;
+    }
+    toast.success(zone.active ? "Bairro desativado." : "Bairro ativado.");
+    router.refresh();
   }
 
   async function handleDelete(zone: DeliveryZoneRow) {
@@ -90,10 +99,11 @@ export function DeliveryZoneManager({ zones }: { zones: DeliveryZoneRow[] }) {
     const res = await fetch(`/api/delivery-zones/${zone.id}`, { method: "DELETE" });
     if (!res.ok) {
       const data = await res.json().catch(() => null);
-      alert(data?.error ?? "Não foi possível excluir este bairro.");
+      toast.error(data?.error ?? "Não foi possível excluir este bairro.");
       return;
     }
-    window.location.reload();
+    toast.success("Bairro excluído.");
+    router.refresh();
   }
 
   return (
