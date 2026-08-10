@@ -23,7 +23,7 @@ export interface WhatsAppOrderSummary {
 }
 
 /** Só dígitos, com DDI 55 na frente (aceita o número já com ou sem o 55). */
-function toWhatsAppDigits(phone: string): string {
+export function toWhatsAppDigits(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   return digits.length <= 11 ? `55${digits}` : digits;
 }
@@ -65,6 +65,12 @@ interface OrderLike {
   deliveryType: string;
   totalCents: number;
   notes: string | null;
+  // Snapshot do endereço no momento do pedido (ver Order.address* no schema)
+  // — pode ser null em respostas antigas de antes desses campos existirem,
+  // por isso ainda caímos no cadastro do cliente como reserva.
+  address?: string | null;
+  addressNumber?: string | null;
+  neighborhood?: string | null;
   items: {
     productName: string;
     quantity: number;
@@ -96,9 +102,9 @@ export function orderToWhatsAppSummary(order: OrderLike, storeName: string): Wha
     totalCents: order.totalCents,
     customerName: order.customer.name,
     customerPhone: order.customer.phone,
-    address: order.customer.address,
-    addressNumber: order.customer.addressNumber,
-    neighborhood: order.customer.neighborhood,
+    address: order.address ?? order.customer.address,
+    addressNumber: order.addressNumber ?? order.customer.addressNumber,
+    neighborhood: order.neighborhood ?? order.customer.neighborhood,
     notes: order.notes,
   };
 }

@@ -1,25 +1,13 @@
 import { getSettingsSafe } from "@/lib/services/settings-service";
 import { isStoreOpenNow } from "@/lib/opening-hours";
 import { parseAcceptedPaymentMethods } from "@/lib/constants";
-import { listActiveDeliveryZonesForStaff } from "@/lib/services/delivery-zone-service";
 import { listActiveCategoriesWithProducts } from "@/lib/services/category-service";
 import { NovaVendaScreen } from "@/components/admin/nova-venda-screen";
 import type { CategoryView } from "@/lib/types";
 
-/** Sem bairros cadastrados/banco indisponível, oferece só balcão/retirada (mesmo padrão do checkout do site). */
-async function listActiveDeliveryZonesSafe() {
-  try {
-    return await listActiveDeliveryZonesForStaff();
-  } catch (error) {
-    console.error("[nova-venda] Falha ao carregar bairros de entrega — usando lista vazia.", error);
-    return [];
-  }
-}
-
 export default async function NovaVendaPage() {
-  const [settings, deliveryZones, categories] = await Promise.all([
+  const [settings, categories] = await Promise.all([
     getSettingsSafe(),
-    listActiveDeliveryZonesSafe(),
     listActiveCategoriesWithProducts(),
   ]);
 
@@ -50,11 +38,6 @@ export default async function NovaVendaPage() {
       acceptedPaymentMethods={parseAcceptedPaymentMethods(settings.acceptedPaymentMethods).filter(
         (method) => method !== "whatsapp"
       )}
-      deliveryZones={deliveryZones.map((zone) => ({
-        id: zone.id,
-        neighborhood: zone.neighborhood,
-        feeCents: zone.feeCents,
-      }))}
       categories={categoryViews}
     />
   );

@@ -18,16 +18,9 @@ const PixPaymentPanel = dynamic(() =>
   import("@/components/site/pix-payment-panel").then((m) => m.PixPaymentPanel)
 );
 
-interface DeliveryZoneOption {
-  id: string;
-  neighborhood: string;
-  feeCents: number;
-}
-
 interface NovaVendaScreenProps {
   storeOpen: boolean;
   acceptedPaymentMethods: PaymentMethod[];
-  deliveryZones: DeliveryZoneOption[];
   categories: CategoryView[];
 }
 
@@ -39,7 +32,6 @@ interface CreatedOrder {
 export function NovaVendaScreen({
   storeOpen,
   acceptedPaymentMethods,
-  deliveryZones,
   categories,
 }: NovaVendaScreenProps) {
   const [search, setSearch] = useState("");
@@ -130,7 +122,6 @@ export function NovaVendaScreen({
         <CheckoutForm
           storeOpen={storeOpen}
           acceptedPaymentMethods={acceptedPaymentMethods}
-          deliveryZones={deliveryZones}
           useCartStoreHook={useBalcaoCartStore}
           deliveryTypeOptions={["balcao", "retirada", "entrega"]}
           requireCustomerContact={false}

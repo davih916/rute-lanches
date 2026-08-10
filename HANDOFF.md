@@ -4,9 +4,14 @@
 > conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
 > algo mudar de forma relevante, atualize este arquivo.
 >
-> Última atualização: 2026-08-03 (leva do painel admin: dashboard com estatísticas, busca/
-> filtros no Kanban, toasts, animações, sidebar responsiva no celular — ver §9.1). Atualização
-> anterior (2026-08-01): bairros com visibilidade admin-only — ver §7. Anterior a essa
+> Última atualização: 2026-08-06 (reformulação grande do fluxo de pedidos: endereço/bairro
+> digitado livremente, aprovação manual da entrega pelo admin, status "Pronto para
+> retirada" separado de "Saiu para entrega", comanda reescrita com endereço/pagamento
+> completos, avisos de WhatsApp pro cliente via link manual — ver §6 e §6.1). Atualização
+> anterior (2026-08-03): leva do painel admin (dashboard com estatísticas, busca/filtros no
+> Kanban, toasts, animações, sidebar responsiva no celular) — ver §9.1. Anterior a essa
+> (2026-08-01): bairros com visibilidade admin-only — ver §7 (nota: essa funcionalidade foi
+> **substituída** pela mudança de 2026-08-06, ver §6.1). Anterior a essa
 > (2026-07-28): forma de pagamento "Combinar pelo WhatsApp" — ver §6. Anterior a essa
 > (2026-07-15): auditoria da infraestrutura de deploy, sem alteração de funcionalidades.
 
@@ -256,8 +261,8 @@ PagBankConfig      (singleton, id fixo "default")
 | `Cliente` / `ClienteUsuario` | empresas assinantes do portal B2B | **não é o consumidor final** — ver §8 |
 | `Category` / `Product` / `ProductAddon` | cardápio | `Product` tem `ncm`/`cfop`/`csosnCst`/`unidadeComercial` opcionais (fiscal) |
 | `Customer` | consumidor final (quem faz o pedido) | `phone` é `@unique` — usado como chave de upsert |
-| `DeliveryZone` | bairro + taxa de entrega | só usado quando `deliveryType = "entrega"`; `visibleToCustomers=false` esconde do checkout público (usado pra endereço específico de cliente com taxa combinada à parte — ver §7) |
-| `Order` | pedido | `status` (kanban), `paymentStatus` (Pix), `deliveryType`, `wantsInvoice`, `paymentMethod` |
+| `DeliveryZone` | **legado** (ver §6.1/§7) — não é mais usado na criação de pedidos desde 2026-08-06, mantido só por compatibilidade com pedidos antigos e uso interno na Venda no Balcão |
+| `Order` | pedido | `status` (kanban), `paymentStatus` (Pix), `deliveryType`, `wantsInvoice`, `paymentMethod`, `address`/`addressNumber`/`neighborhood`/`complement`/`reference` (snapshot do endereço digitado, só entrega — ver §6.1), `rejectionReason`, `notifiedStatuses` |
 | `OrderItem` / `OrderItemAddon` | itens do pedido | snapshot de nome/preço no momento da compra |
 | `OrderStatusHistory` | auditoria de mudança de status | |
 | `Settings` | configuração da loja | cores, horário, forma de pagamento aceita, etc. |
@@ -268,7 +273,11 @@ PagBankConfig      (singleton, id fixo "default")
 
 ### Campos de "status" (strings, não enum nativo)
 
-- `Order.status`: `"recebido" | "preparando" | "saiu_entrega" | "entregue" | "cancelado"`
+- `Order.status`: `"recebido" | "preparando" | "saiu_entrega" | "pronto_retirada" | "entregue" | "cancelado"`
+  — `"saiu_entrega"` só pra `deliveryType="entrega"`, `"pronto_retirada"` só pra
+  `"retirada"`/`"balcao"` (nunca os dois; ver `getNextStatus`/`getNextStatusActionLabel`
+  em `src/lib/constants.ts`). `"recebido"` + `"entrega"` significa "aguardando
+  confirmação da entrega" — ver §6.1.
 - `Order.deliveryType`: `"entrega" | "retirada" | "balcao"`
 - `Order.paymentMethod`: `"pix" | "dinheiro" | "cartao_credito" | "cartao_debito"`
 - `Order.paymentStatus`: `"pendente" | "pago" | "erro"`
@@ -297,6 +306,8 @@ PagBankConfig      (singleton, id fixo "default")
 | `20260714150000_add_pix_charge_external_id_index` | índice em `PixCharge.externalId` |
 | `20260714160000_fiscal_config_env_based_credentials` | remove `provider`/`ambiente`/`clientId`/`clientSecretEncrypted` de `FiscalConfig` (foram para env vars) |
 | `20260714170000_add_missing_fk_indexes` | índices que faltavam em FKs (`customerId`, `deliveryZoneId`, `productId`) |
+| `20260801230000_add_delivery_zone_visibility` | `DeliveryZone.visibleToCustomers` (hoje sem uso prático — ver `20260806140000` abaixo) |
+| `20260806140000_order_address_snapshot_and_approval` | `Order.address/addressNumber/neighborhood/complement/reference` (snapshot), `Order.rejectionReason`, `Order.notifiedStatuses` — ver §6.1. Faz backfill dos pedidos existentes a partir do Customer/DeliveryZone vinculado. |
 
 ⚠️ **Nota histórica**: existe uma migration `20260703143145_init_postgres` registrada na
 tabela `_prisma_migrations` do banco de produção que **não tem pasta correspondente** no
@@ -355,21 +366,96 @@ createOrder() [src/lib/services/order-service.ts]
 Cliente é redirecionado pra /pedido/[id] — mostra status, resumo, e:
   - se Pix: PixPaymentPanel gerando a cobrança automaticamente (polling 5s)
   - se "Combinar pelo WhatsApp" (ver abaixo): WhatsAppOrderPanel com botão de confirmação
+  - se entrega: total mostrado é só dos itens ("Total (sem a entrega)") — a taxa vira "A
+    combinar" até o admin aprovar (ver §6.1)
    ↓
 Pedido aparece no Kanban do admin (poll a cada 5s) em "Novo pedido"
    ↓
+Se deliveryType="entrega": card mostra "⚠️ Aguardando confirmação da entrega" com
+Aceitar/Recusar em vez do botão normal — ver §6.1. Retirada/balcão pulam essa etapa.
+   ↓
 Admin avança o status pelo Kanban (PATCH /api/orders/[id]/status), com concorrência
 otimista: o Kanban manda o `previousStatus` esperado; se outro admin já mudou, a API
-responde 409 e o Kanban avisa + recarrega
+responde 409 e o Kanban avisa + recarrega. Toda transição é revalidada no backend
+(`isValidStatusTransition` em order-service.ts) — o tipo de pedido decide o próximo
+status válido, não só o que o frontend mandou.
    ↓
-Transição "preparando" → "saiu_entrega": dispara automaticamente
+Transição "preparando" → "saiu_entrega" (entrega) ou "preparando" → "pronto_retirada"
+(retirada/balcão) dispara automaticamente:
   1. emissão fiscal (se wantsInvoice) — ver §11
   2. impressão automática (popup + window.print()) — ver §12
+   ↓
+"pronto_retirada" → "entregue" (retirada/balcão) — status final, igual "entregue" de
+uma entrega. Em cada mudança de status (exceto "recebido"/"cancelado"), o card mostra um
+botão "Avisar cliente no WhatsApp" com a mensagem certa pronta — ver §6.1.
 ```
 
-`DeliveryType` tem 3 valores: `"entrega"` (com bairro/taxa), `"retirada"` (sem taxa) e
-`"balcao"` (venda presencial criada pelo admin — ver §7). Fiscalmente, `retirada` e
-`balcao` são tratados como `indPres: 1` (presencial); `entrega` como `indPres: 4`.
+`DeliveryType` tem 3 valores: `"entrega"` (endereço digitado, taxa definida na aprovação),
+`"retirada"` (sem taxa) e `"balcao"` (venda presencial criada pelo admin — ver §7).
+Fiscalmente, `retirada` e `balcao` são tratados como `indPres: 1` (presencial); `entrega`
+como `indPres: 4`.
+
+### 6.1 Endereço livre, aprovação de entrega e avisos por WhatsApp (2026-08-06)
+
+Antes, o cliente escolhia o bairro de uma lista pré-cadastrada (`DeliveryZone`), com taxa
+fixa calculada automaticamente. Isso mudou: **o cliente digita o próprio endereço e
+bairro livremente** — não existe mais lista, e a taxa não é mais calculada sozinha (não
+tem como, sem saber o bairro de antemão). `DeliveryZoneManager`/`DeliveryZone` continuam
+existindo no código (não foram apagados — ver §7 e comentário em
+`configuracoes/page.tsx`), só não fazem mais parte do fluxo de pedido.
+
+```
+Checkout (entrega): cliente digita endereço + número + BAIRRO (texto livre) + complemento
++ ponto de referência → POST /api/orders
+   ↓
+createOrder(): grava um SNAPSHOT desses campos direto no Order (Order.address,
+addressNumber, neighborhood, complement, reference) — não só no Customer, que é mutável
+e pode ter endereço diferente em cada pedido. deliveryFeeCents fica 0 (pendente).
+   ↓
+Pedido cai no Kanban em "recebido" com o card mostrando "⚠️ Aguardando confirmação da
+entrega" (order-card.tsx) em vez do botão normal — só acontece pra deliveryType="entrega".
+   ↓
+Admin vê endereço/bairro/referência no próprio card e decide:
+
+  ACEITAR (POST /api/orders/[id]/approve-delivery, body {feeCents})
+    → approveDelivery() em order-service.ts: só aceita se status="recebido" E
+      deliveryType="entrega" (senão 400 NOT_PENDING_APPROVAL); define
+      deliveryFeeCents/totalCents com o valor que o admin digitou (prompt simples) e
+      avança pra "preparando" — dispara impressão automática da comanda já com o
+      endereço completo.
+
+  RECUSAR (POST /api/orders/[id]/reject-delivery, body {reason})
+    → rejectDelivery(): cancela o pedido e grava Order.rejectionReason. Abre
+      automaticamente um link wa.me pro CLIENTE com a mensagem de recusa (ver abaixo).
+```
+
+**Avisos de status pro cliente** (`src/lib/order-notifications.ts`): diferente do
+"Combinar pelo WhatsApp" (que manda o pedido pra LOJA), isso manda uma mensagem de
+status pro **cliente**, usando o telefone dele (`order.customer.phone`). Continua sendo
+um **link `wa.me` que o admin clica** — não existe integração com a API oficial do
+WhatsApp Business (Meta Cloud API/Twilio/Z-API) neste projeto, então não há envio 100%
+automático sem ninguém tocar em nada. Decisão explícita do cliente (custo/burocracia de
+contratar a API oficial ficou de fora por enquanto).
+
+- Mensagens automáticas por status: `preparando`, `saiu_entrega`, `pronto_retirada`,
+  `entregue` (textos em `getStatusNotificationMessage`). "recebido"/"cancelado" não têm
+  mensagem de avanço — "cancelado" por recusa de entrega tem a sua própria
+  (`getDeliveryRejectionMessage`, com o motivo se o admin preencheu).
+- `Order.notifiedStatuses` (JSON array) marca quais status já tiveram o link clicado —
+  `POST /api/orders/[id]/notify` grava isso. É só controle visual (o botão vira "Avisado
+  — reenviar" em vez de sumir) — nada impede clicar de novo se precisar reenviar de
+  verdade, já que o envio em si acontece dentro do WhatsApp do admin, fora do sistema.
+
+**Pendências conhecidas desta mudança** (ver §21):
+- Pedidos antigos (de antes de 2026-08-06) tiveram o endereço preenchido por uma migração
+  a partir do cadastro atual do Customer/DeliveryZone vinculado — se o cliente mudou de
+  endereço depois daquele pedido, o snapshot migrado pode não bater 100% com o endereço
+  real daquele pedido específico (limitação inerente: o modelo antigo não guardava esse
+  snapshot por pedido). Pedidos criados a partir de agora não têm esse problema.
+- Venda no Balcão (`/admin/nova-venda`) também passou a exigir aprovação quando
+  `deliveryType="entrega"` é escolhido ali — mesmo caminho único de código, sem duplicar
+  lógica. Na prática, se o funcionário já sabe a taxa (está com o cliente/telefone na
+  mão), ele mesmo aprova o próprio pedido logo em seguida no Kanban.
 
 ### Forma de pagamento "Combinar pelo WhatsApp"
 
@@ -933,6 +1019,15 @@ auditoria de código), do mais recente ao mais antigo:
   SO, como explicado em §12/§20.
 - Migration histórica órfã (`20260703143145_init_postgres`, ver §4) — inofensiva, só
   cosmética no `migrate status`.
+- **Avisos de WhatsApp pro cliente não são automáticos de verdade** (ver §6.1) — é um
+  link `wa.me` que o admin precisa clicar e confirmar o envio manualmente. Pra ser 100%
+  automático (sem ninguém clicar em nada), precisa contratar a API oficial do WhatsApp
+  Business (Meta Cloud API) ou um provedor tipo Z-API/Twilio — decisão explícita do
+  cliente de deixar isso de fora por enquanto (evita custo/burocracia de verificação de
+  conta comercial).
+- **Snapshot de endereço em pedidos anteriores a 2026-08-06**: preenchido por migração a
+  partir do cadastro do Customer/DeliveryZone na época da migração, não do que estava
+  valendo quando aquele pedido específico foi feito (ver §6.1).
 
 ---
 

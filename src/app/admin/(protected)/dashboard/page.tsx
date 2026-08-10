@@ -4,9 +4,10 @@ import { KanbanBoard } from "@/components/admin/kanban-board";
 import { TodayStatsBar } from "@/components/admin/today-stats";
 import { Button } from "@/components/ui/button";
 import { listOrders, getTodayStats } from "@/lib/services/order-service";
+import { getSettings } from "@/lib/services/settings-service";
 
 export default async function AdminDashboardPage() {
-  const [orders, stats] = await Promise.all([listOrders(), getTodayStats()]);
+  const [orders, stats, settings] = await Promise.all([listOrders(), getTodayStats(), getSettings()]);
 
   return (
     <div className="flex h-full flex-col">
@@ -24,7 +25,7 @@ export default async function AdminDashboardPage() {
       </header>
       <TodayStatsBar stats={stats} />
       <div className="min-h-0 flex-1 overflow-hidden">
-        <KanbanBoard initialOrders={orders} />
+        <KanbanBoard initialOrders={orders} storeName={settings.storeName} />
       </div>
     </div>
   );

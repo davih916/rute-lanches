@@ -1,19 +1,28 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { Printer, MapPin, Store } from "lucide-react";
-import { formatCentsToBRL } from "@/lib/money";
+import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Printer, MapPin, Store, AlertTriangle, Check, X, MessageCircle } from "lucide-react";
+import { formatCentsToBRL, reaisToCents } from "@/lib/money";
 import { formatOrderNumber, formatRelativeTime } from "@/lib/format";
 import {
-  NEXT_STATUS,
-  NEXT_STATUS_ACTION_LABEL,
+  getNextStatus,
+  getNextStatusActionLabel,
   getPaymentMethodLabel,
   DELIVERY_TYPE_LABELS,
   type OrderStatus,
   type PaymentMethod,
   type DeliveryType,
 } from "@/lib/constants";
+import {
+  getStatusNotificationMessage,
+  getDeliveryRejectionMessage,
+  buildCustomerNotificationLink,
+  parseNotifiedStatuses,
+} from "@/lib/order-notifications";
 import { Button } from "@/components/ui/button";
 import type { OrderWithRelations } from "@/lib/services/order-service";
 
@@ -29,15 +38,117 @@ interface OrderCardProps {
   onAcknowledge: (orderId: string) => void;
   isUpdating: boolean;
   isNew: boolean;
+  storeName: string;
 }
 
-export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, isNew }: OrderCardProps) {
+export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, isNew, storeName }: OrderCardProps) {
+  const queryClient = useQueryClient();
+  const [approving, setApproving] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+
   const status = order.status as OrderStatus;
   const deliveryType = order.deliveryType as DeliveryType;
-  const next = NEXT_STATUS[status];
-  const actionLabel = NEXT_STATUS_ACTION_LABEL[status];
+  const next = getNextStatus(status, deliveryType);
+  const actionLabel = getNextStatusActionLabel(status, deliveryType);
   const isCash = (order.paymentMethod as PaymentMethod) === "dinheiro";
   const isPix = (order.paymentMethod as PaymentMethod) === "pix";
+  const awaitingDeliveryApproval = status === "recebido" && deliveryType === "entrega";
+  const notifiedStatuses = parseNotifiedStatuses(order.notifiedStatuses);
+  const notifiableOrder = {
+    orderNumber: order.orderNumber,
+    customerName: order.customer.name,
+    customerPhone: order.customer.phone,
+    storeName,
+  };
+  const notificationMessage = getStatusNotificationMessage(notifiableOrder, status);
+  const alreadyNotified = notifiedStatuses.includes(status);
+
+  async function refreshOrders() {
+    await queryClient.invalidateQueries({ queryKey: ["orders"] });
+  }
+
+  async function handleApproveDelivery(e: React.MouseEvent) {
+    e.stopPropagation();
+    const input = window.prompt(
+      "Qual a taxa de entrega pra esse endereço? (em reais, ex: 8,00 — deixe 0 se for grátis)",
+      "0"
+    );
+    if (input === null) return;
+    const feeCents = reaisToCents(input);
+    setApproving(true);
+    try {
+      const res = await fetch(`/api/orders/${order.id}/approve-delivery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feeCents }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Não foi possível aprovar a entrega.");
+        return;
+      }
+      toast.success("Entrega aprovada — pedido em preparo.");
+      window.open(`/admin/comanda/${order.id}?autoprint=1`, "_blank", "width=380,height=640");
+      await refreshOrders();
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setApproving(false);
+    }
+  }
+
+  async function handleRejectDelivery(e: React.MouseEvent) {
+    e.stopPropagation();
+    const reason = window.prompt(
+      "Por que a entrega está sendo recusada? (opcional, aparece na mensagem pro cliente)",
+      ""
+    );
+    if (reason === null) return;
+    if (!confirm(`Recusar a entrega do pedido ${formatOrderNumber(order.orderNumber)}? O pedido será cancelado.`)) {
+      return;
+    }
+    setRejecting(true);
+    try {
+      const res = await fetch(`/api/orders/${order.id}/reject-delivery`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason || undefined }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Não foi possível recusar a entrega.");
+        return;
+      }
+      toast.success("Entrega recusada — pedido cancelado.");
+      if (order.customer.phone) {
+        const message = getDeliveryRejectionMessage(
+          { orderNumber: order.orderNumber, customerName: order.customer.name, customerPhone: order.customer.phone, storeName },
+          reason
+        );
+        window.open(buildCustomerNotificationLink(order.customer.phone, message), "_blank", "noopener,noreferrer");
+      }
+      await refreshOrders();
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setRejecting(false);
+    }
+  }
+
+  async function handleNotifyCustomer(e: React.MouseEvent, link: string) {
+    e.stopPropagation();
+    window.open(link, "_blank", "noopener,noreferrer");
+    try {
+      await fetch(`/api/orders/${order.id}/notify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      await refreshOrders();
+    } catch {
+      // Best-effort — o link já abriu, só não conseguimos marcar como avisado.
+    }
+  }
 
   return (
     <div
@@ -85,11 +196,15 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
         {deliveryType === "entrega" && (
           <>
             <p className="text-neutral-500">
-              {order.customer.address}
-              {order.customer.addressNumber ? `, ${order.customer.addressNumber}` : ""}
-              {order.deliveryZone ? ` - ${order.deliveryZone.neighborhood}` : ""}
+              {order.address}
+              {order.addressNumber ? `, ${order.addressNumber}` : ""}
+              {order.neighborhood ? ` - ${order.neighborhood}` : ""}
             </p>
-            {order.deliveryZone && (
+            {order.complement && <p className="text-sm text-neutral-500">{order.complement}</p>}
+            {order.reference && (
+              <p className="text-sm text-neutral-400">Referência: {order.reference}</p>
+            )}
+            {!awaitingDeliveryApproval && (
               <p className="text-sm font-medium text-neutral-400">
                 Taxa de entrega: {formatCentsToBRL(order.deliveryFeeCents)}
               </p>
@@ -149,21 +264,69 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
         </span>
       </div>
 
-      {actionLabel && next && (
-        <Button
-          size="lg"
-          loading={isUpdating}
-          onClick={(e) => {
-            e.stopPropagation();
-            onChangeStatus(order.id, next, status);
-          }}
-          className="w-full text-base"
-        >
-          {actionLabel}
-        </Button>
+      {awaitingDeliveryApproval ? (
+        <div className="flex flex-col gap-2 rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
+          <p className="flex items-center gap-1.5 text-sm font-extrabold uppercase text-amber-800">
+            <AlertTriangle className="size-4" />
+            Aguardando confirmação da entrega
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              size="lg"
+              loading={approving}
+              onClick={handleApproveDelivery}
+              className="w-full !bg-emerald-600 text-base hover:!bg-emerald-700"
+            >
+              <Check className="size-4" />
+              Aceitar
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              loading={rejecting}
+              onClick={handleRejectDelivery}
+              className="w-full border-red-300 text-base text-red-600 hover:bg-red-50"
+            >
+              <X className="size-4" />
+              Recusar
+            </Button>
+          </div>
+        </div>
+      ) : (
+        actionLabel &&
+        next && (
+          <Button
+            size="lg"
+            loading={isUpdating}
+            onClick={(e) => {
+              e.stopPropagation();
+              onChangeStatus(order.id, next, status);
+            }}
+            className="w-full text-base"
+          >
+            {actionLabel}
+          </Button>
+        )
       )}
 
-      {status !== "cancelado" && status !== "entregue" && (
+      {notificationMessage && order.customer.phone && (
+        <button
+          onClick={(e) =>
+            handleNotifyCustomer(e, buildCustomerNotificationLink(order.customer.phone, notificationMessage))
+          }
+          className={
+            "flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors " +
+            (alreadyNotified
+              ? "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+              : "border-neutral-200 text-neutral-600 hover:bg-neutral-50")
+          }
+        >
+          <MessageCircle className="size-4" />
+          {alreadyNotified ? "Avisado — reenviar no WhatsApp" : "Avisar cliente no WhatsApp"}
+        </button>
+      )}
+
+      {!awaitingDeliveryApproval && status !== "cancelado" && status !== "entregue" && (
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -176,6 +339,10 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
         >
           Cancelar pedido
         </button>
+      )}
+
+      {order.status === "cancelado" && order.rejectionReason && (
+        <p className="text-xs text-neutral-400">Entrega recusada: {order.rejectionReason}</p>
       )}
 
       {status === "entregue" && <FiscalAction orderId={order.id} fiscal={order.fiscal} />}

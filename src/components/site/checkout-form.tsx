@@ -29,16 +29,9 @@ function generatePlaceholderPhone(): string {
   return `${Date.now()}${random.toString().padStart(6, "0")}`;
 }
 
-interface DeliveryZoneOption {
-  id: string;
-  neighborhood: string;
-  feeCents: number;
-}
-
 interface CheckoutFormProps {
   storeOpen: boolean;
   acceptedPaymentMethods: PaymentMethod[];
-  deliveryZones: DeliveryZoneOption[];
   /** Número/nome da loja — usados para montar o link de confirmação quando paymentMethod = "whatsapp". */
   storeWhatsapp?: string | null;
   storeName?: string;
@@ -58,7 +51,6 @@ interface CheckoutFormProps {
 export function CheckoutForm({
   storeOpen,
   acceptedPaymentMethods,
-  deliveryZones,
   storeWhatsapp,
   storeName = "",
   useCartStoreHook = useCartStore,
@@ -72,19 +64,12 @@ export function CheckoutForm({
   const items = useCartStoreHook((s) => s.items);
   const clear = useCartStoreHook((s) => s.clear);
 
-  const hasDeliveryZones = deliveryZones.length > 0;
-  const [deliveryType, setDeliveryType] = useState<DeliveryType>(() => {
-    if (hasDeliveryZones && deliveryTypeOptions.includes("entrega")) return "entrega";
-    // "entrega" indisponível (sem bairro cadastrado) — não pode ser a opção
-    // inicial, senão o formulário abre com os campos de endereço de uma
-    // opção que está desabilitada e não pode ser enviada.
-    return deliveryTypeOptions.find((type) => type !== "entrega") ?? deliveryTypeOptions[0];
-  });
+  const [deliveryType, setDeliveryType] = useState<DeliveryType>(deliveryTypeOptions[0]);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [addressNumber, setAddressNumber] = useState("");
-  const [deliveryZoneId, setDeliveryZoneId] = useState(deliveryZones[0]?.id ?? "");
+  const [neighborhood, setNeighborhood] = useState("");
   const [complement, setComplement] = useState("");
   const [reference, setReference] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
@@ -116,9 +101,10 @@ export function CheckoutForm({
 
   const subtotal = getCartSubtotalCents(items);
   const isDelivery = deliveryType === "entrega";
-  const selectedZone = deliveryZones.find((z) => z.id === deliveryZoneId);
-  const effectiveDeliveryFee = isDelivery ? (selectedZone?.feeCents ?? 0) : 0;
-  const total = subtotal + effectiveDeliveryFee;
+  // A taxa de entrega não é mais calculada na hora — sem bairro pré-cadastrado,
+  // só a loja sabe se aquele endereço é viável e quanto cobrar. O total exibido
+  // aqui é só dos itens; a loja confirma o valor final com a taxa ao aceitar.
+  const total = subtotal;
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -151,11 +137,11 @@ export function CheckoutForm({
             phone: phone || generatePlaceholderPhone(),
             address: isDelivery ? address : undefined,
             addressNumber: isDelivery ? addressNumber || undefined : undefined,
+            neighborhood: isDelivery ? neighborhood : undefined,
             complement: isDelivery ? complement || undefined : undefined,
             reference: isDelivery ? reference || undefined : undefined,
           },
           paymentMethod,
-          deliveryZoneId: isDelivery ? deliveryZoneId : undefined,
           cashChangeForCents,
           cpfCnpj: cpfCnpj || undefined,
           wantsInvoice,
@@ -226,49 +212,44 @@ export function CheckoutForm({
             <span>Subtotal</span>
             <span>{formatCentsToBRL(subtotal)}</span>
           </div>
-          {isDelivery && selectedZone && (
+          {isDelivery && (
             <div className="flex justify-between text-neutral-500">
-              <span>Entrega ({selectedZone.neighborhood})</span>
-              <span>
-                {selectedZone.feeCents > 0 ? formatCentsToBRL(selectedZone.feeCents) : "Grátis"}
-              </span>
+              <span>Taxa de entrega</span>
+              <span>A combinar</span>
             </div>
           )}
           <div className="flex justify-between text-base font-bold text-neutral-900">
-            <span>Total</span>
+            <span>{isDelivery ? "Total (sem a entrega)" : "Total"}</span>
             <span>{formatCentsToBRL(total)}</span>
           </div>
         </div>
+        {isDelivery && (
+          <p className="mt-2 text-xs text-neutral-400">
+            A taxa de entrega depende do seu endereço — a loja confirma o valor final ao aceitar
+            seu pedido.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-3">
         <p className="text-sm font-semibold text-neutral-800">Como você quer receber?</p>
         <div className={`grid gap-2 ${deliveryTypeOptions.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`}>
-          {deliveryTypeOptions.map((type) => {
-            const disabled = type === "entrega" && !hasDeliveryZones;
-            return (
-              <button
-                key={type}
-                type="button"
-                disabled={disabled}
-                onClick={() => setDeliveryType(type)}
-                className={
-                  "rounded-lg border px-4 py-3 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 " +
-                  (deliveryType === type
-                    ? "border-[var(--brand-primary)] bg-[var(--brand-primary)]/10 text-[var(--brand-primary)]"
-                    : "border-neutral-200 text-neutral-600 hover:bg-neutral-50")
-                }
-              >
-                {DELIVERY_TYPE_LABELS[type]}
-              </button>
-            );
-          })}
+          {deliveryTypeOptions.map((type) => (
+            <button
+              key={type}
+              type="button"
+              onClick={() => setDeliveryType(type)}
+              className={
+                "rounded-lg border px-4 py-3 text-sm font-semibold transition-colors " +
+                (deliveryType === type
+                  ? "border-[var(--brand-primary)] bg-[var(--brand-primary)]/10 text-[var(--brand-primary)]"
+                  : "border-neutral-200 text-neutral-600 hover:bg-neutral-50")
+              }
+            >
+              {DELIVERY_TYPE_LABELS[type]}
+            </button>
+          ))}
         </div>
-        {!hasDeliveryZones && (
-          <p className="text-xs text-neutral-400">
-            Entrega indisponível no momento — só retirada no local.
-          </p>
-        )}
       </div>
 
       <div className="flex flex-col gap-3">
@@ -307,20 +288,13 @@ export function CheckoutForm({
                 value={addressNumber}
                 onChange={(e) => setAddressNumber(e.target.value)}
               />
-              <Select
-                name="deliveryZoneId"
+              <Input
+                name="neighborhood"
                 label="Bairro"
                 required
-                value={deliveryZoneId}
-                onChange={(e) => setDeliveryZoneId(e.target.value)}
-              >
-                {deliveryZones.map((zone) => (
-                  <option key={zone.id} value={zone.id}>
-                    {zone.neighborhood} —{" "}
-                    {zone.feeCents > 0 ? formatCentsToBRL(zone.feeCents) : "Grátis"}
-                  </option>
-                ))}
-              </Select>
+                value={neighborhood}
+                onChange={(e) => setNeighborhood(e.target.value)}
+              />
             </div>
             <Input
               name="complement"

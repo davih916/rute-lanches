@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PAYMENT_METHODS, DELIVERY_TYPES } from "@/lib/constants";
+import { PAYMENT_METHODS, DELIVERY_TYPES, ORDER_STATUSES } from "@/lib/constants";
 
 export const orderItemInputSchema = z.object({
   productId: z.string().min(1),
@@ -26,9 +26,6 @@ export const createOrderSchema = z
       reference: z.string().trim().max(200).optional(),
     }),
     paymentMethod: z.enum(PAYMENT_METHODS),
-    // Bairro escolhido (só entrega) — a taxa nunca vem do cliente, é sempre
-    // recalculada no order-service a partir do DeliveryZone no banco.
-    deliveryZoneId: z.string().min(1).optional(),
     // Valor (em centavos) com que o cliente vai pagar em dinheiro — usado só
     // para calcular o troco. A conferência de que é >= total é feita no
     // order-service, pois o total só é conhecido depois de recalcular preços.
@@ -51,11 +48,11 @@ export const createOrderSchema = z
         message: "Informe o endereço para entrega",
       });
     }
-    if (data.deliveryType === "entrega" && !data.deliveryZoneId) {
+    if (data.deliveryType === "entrega" && (!data.customer.neighborhood || data.customer.neighborhood.trim().length < 2)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["deliveryZoneId"],
-        message: "Selecione o bairro de entrega",
+        path: ["customer", "neighborhood"],
+        message: "Informe o bairro para entrega",
       });
     }
     if (data.cashChangeForCents !== undefined && data.paymentMethod !== "dinheiro") {
@@ -70,11 +67,31 @@ export const createOrderSchema = z
 export type CreateOrderInput = z.infer<typeof createOrderSchema>;
 
 export const updateOrderStatusSchema = z.object({
-  status: z.enum(["recebido", "preparando", "saiu_entrega", "entregue", "cancelado"]),
+  status: z.enum(ORDER_STATUSES),
   // Status que o cliente acredita que o pedido está no momento do clique —
   // usado para evitar sobrescrever uma mudança concorrente feita por outro
   // admin (ver updateOrderStatus). Opcional para não quebrar chamadores antigos.
-  previousStatus: z.enum(["recebido", "preparando", "saiu_entrega", "entregue", "cancelado"]).optional(),
+  previousStatus: z.enum(ORDER_STATUSES).optional(),
 });
 
 export type UpdateOrderStatusInput = z.infer<typeof updateOrderStatusSchema>;
+
+export const approveDeliverySchema = z.object({
+  // Taxa de entrega definida pelo admin ao aceitar (sem bairro pré-cadastrado
+  // não dá pra calcular sozinho) — 0 é válido (entrega grátis, promoção etc).
+  feeCents: z.number().int().min(0).max(100_000_00),
+});
+
+export type ApproveDeliveryInput = z.infer<typeof approveDeliverySchema>;
+
+export const rejectDeliverySchema = z.object({
+  reason: z.string().trim().max(300).optional(),
+});
+
+export type RejectDeliveryInput = z.infer<typeof rejectDeliverySchema>;
+
+export const notifyStatusSchema = z.object({
+  status: z.enum(ORDER_STATUSES),
+});
+
+export type NotifyStatusInput = z.infer<typeof notifyStatusSchema>;

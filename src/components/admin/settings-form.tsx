@@ -272,8 +272,8 @@ export function SettingsForm({ settings }: SettingsFormProps) {
           onChange={(e) => setMinOrder(e.target.value)}
         />
         <p className="text-xs text-neutral-400">
-          A taxa de entrega agora é definida por bairro — ver &ldquo;Bairros e taxa de
-          entrega&rdquo; abaixo.
+          A taxa de entrega é definida caso a caso: o cliente digita o próprio endereço no
+          checkout, e você confirma o valor da entrega ao aceitar o pedido no Kanban.
         </p>
         <Select
           name="receiptWidth"

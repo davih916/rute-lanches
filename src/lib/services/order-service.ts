@@ -2,9 +2,10 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { getSettings } from "@/lib/services/settings-service";
 import { isStoreOpenNow } from "@/lib/opening-hours";
-import { parseAcceptedPaymentMethods } from "@/lib/constants";
+import { parseAcceptedPaymentMethods, getNextStatus } from "@/lib/constants";
+import { parseNotifiedStatuses } from "@/lib/order-notifications";
 import type { CreateOrderInput } from "@/lib/validations/order";
-import type { OrderStatus } from "@/lib/constants";
+import type { OrderStatus, DeliveryType } from "@/lib/constants";
 import { Prisma } from "@prisma/client";
 
 export class OrderServiceError extends Error {
@@ -13,13 +14,13 @@ export class OrderServiceError extends Error {
     public readonly code:
       | "STORE_CLOSED"
       | "PAYMENT_METHOD_DISABLED"
-      | "DELIVERY_ZONE_REQUIRED"
-      | "DELIVERY_ZONE_UNAVAILABLE"
       | "PRODUCT_NOT_FOUND"
       | "ADDON_NOT_FOUND"
       | "ORDER_NOT_FOUND"
       | "INVALID_CASH_AMOUNT"
       | "STATUS_CONFLICT"
+      | "INVALID_STATUS_TRANSITION"
+      | "NOT_PENDING_APPROVAL"
   ) {
     super(message);
     this.name = "OrderServiceError";
@@ -48,20 +49,6 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
       "Esta forma de pagamento não está disponível no momento.",
       "PAYMENT_METHOD_DISABLED"
     );
-  }
-
-  let deliveryZone = null;
-  if (input.deliveryType === "entrega") {
-    if (!input.deliveryZoneId) {
-      throw new OrderServiceError("Selecione o bairro de entrega.", "DELIVERY_ZONE_REQUIRED");
-    }
-    deliveryZone = await prisma.deliveryZone.findUnique({ where: { id: input.deliveryZoneId } });
-    if (!deliveryZone || !deliveryZone.active) {
-      throw new OrderServiceError(
-        "Este bairro não está mais disponível para entrega.",
-        "DELIVERY_ZONE_UNAVAILABLE"
-      );
-    }
   }
 
   const productIds = input.items.map((item) => item.productId);
@@ -112,8 +99,10 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
     });
   }
 
-  // Snapshot: a taxa é gravada agora e nunca recalculada depois, mesmo que o bairro mude de preço.
-  const deliveryFeeCents = deliveryZone?.feeCents ?? 0;
+  // Entrega não usa mais bairro pré-cadastrado com taxa fixa — o admin define
+  // a taxa real ao aprovar a entrega (ver approveDelivery), porque só ele sabe
+  // se aquele endereço digitado é viável e qual a distância de verdade.
+  const deliveryFeeCents = 0;
   const totalCents = itemsTotalCents + deliveryFeeCents;
 
   if (input.cashChangeForCents !== undefined && input.cashChangeForCents < totalCents) {
@@ -123,16 +112,13 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
     );
   }
 
-  // O bairro escolhido no select é a fonte da verdade do nome — nunca texto livre do cliente.
-  const neighborhood = deliveryZone?.neighborhood ?? input.customer.neighborhood;
-
   const customer = await prisma.customer.upsert({
     where: { phone: input.customer.phone },
     update: {
       name: input.customer.name,
       address: input.customer.address,
       addressNumber: input.customer.addressNumber,
-      neighborhood,
+      neighborhood: input.customer.neighborhood,
       complement: input.customer.complement,
       reference: input.customer.reference,
     },
@@ -141,7 +127,7 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
       phone: input.customer.phone,
       address: input.customer.address,
       addressNumber: input.customer.addressNumber,
-      neighborhood,
+      neighborhood: input.customer.neighborhood,
       complement: input.customer.complement,
       reference: input.customer.reference,
     },
@@ -167,7 +153,14 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
         wantsInvoice: input.wantsInvoice,
         cashChangeForCents: input.cashChangeForCents ?? null,
         itemsTotalCents,
-        deliveryZoneId: deliveryZone?.id ?? null,
+        // Snapshot do endereço no momento do pedido — independente do
+        // cadastro (mutável) do cliente, pra comanda/reimpressão sempre
+        // mostrarem o endereço de QUANDO o pedido foi feito.
+        address: input.deliveryType === "entrega" ? input.customer.address || null : null,
+        addressNumber: input.deliveryType === "entrega" ? input.customer.addressNumber || null : null,
+        neighborhood: input.deliveryType === "entrega" ? input.customer.neighborhood || null : null,
+        complement: input.deliveryType === "entrega" ? input.customer.complement || null : null,
+        reference: input.deliveryType === "entrega" ? input.customer.reference || null : null,
         deliveryFeeCents,
         totalCents,
         notes: input.notes || null,
@@ -208,6 +201,24 @@ export async function getOrderById(id: string): Promise<OrderWithRelations | nul
   return prisma.order.findUnique({ where: { id }, include: orderInclude });
 }
 
+/**
+ * Confere se a transição faz sentido pro tipo de pedido — nunca confia só no
+ * que o cliente (frontend) mandou. "cancelado" é sempre permitido (menos de
+ * um pedido já finalizado) por ser uma saída de emergência fora do fluxo
+ * normal; pedidos de entrega em "recebido" só saem daí via
+ * approveDelivery/rejectDelivery (não pelo endpoint genérico de status).
+ */
+function isValidStatusTransition(
+  current: OrderStatus,
+  next: OrderStatus,
+  deliveryType: DeliveryType
+): boolean {
+  if (current === "entregue" || current === "cancelado") return false;
+  if (next === "cancelado") return true;
+  if (current === "recebido" && deliveryType === "entrega") return false;
+  return getNextStatus(current, deliveryType) === next;
+}
+
 export async function updateOrderStatus(
   orderId: string,
   status: OrderStatus,
@@ -217,6 +228,13 @@ export async function updateOrderStatus(
   const existing = await prisma.order.findUnique({ where: { id: orderId } });
   if (!existing) {
     throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+
+  if (!isValidStatusTransition(existing.status as OrderStatus, status, existing.deliveryType as DeliveryType)) {
+    throw new OrderServiceError(
+      "Essa mudança de status não é permitida para esse pedido.",
+      "INVALID_STATUS_TRANSITION"
+    );
   }
 
   // Quando o chamador informa o status que esperava encontrar (ex: o Kanban
@@ -250,6 +268,100 @@ export async function updateOrderStatus(
   ]);
 
   return order;
+}
+
+/**
+ * Aprova a entrega de um pedido "recebido" (sem bairro pré-cadastrado, o
+ * admin decide a taxa real ao aceitar) e o move pra "preparando". Só vale
+ * pra deliveryType="entrega" — retirada/balcão nunca passam por aprovação.
+ */
+export async function approveDelivery(
+  orderId: string,
+  feeCents: number,
+  adminId: string
+): Promise<OrderWithRelations> {
+  const existing = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existing) {
+    throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+  if (existing.deliveryType !== "entrega" || existing.status !== "recebido") {
+    throw new OrderServiceError(
+      "Este pedido não está aguardando aprovação de entrega.",
+      "NOT_PENDING_APPROVAL"
+    );
+  }
+
+  const updated = await prisma.order.updateMany({
+    where: { id: orderId, status: "recebido" },
+    data: {
+      status: "preparando",
+      deliveryFeeCents: feeCents,
+      totalCents: existing.itemsTotalCents + feeCents,
+    },
+  });
+  if (updated.count === 0) {
+    throw new OrderServiceError(
+      "Este pedido já foi atualizado por outra pessoa. Atualize a tela e tente de novo.",
+      "STATUS_CONFLICT"
+    );
+  }
+  await prisma.orderStatusHistory.create({
+    data: { orderId, status: "preparando", changedById: adminId },
+  });
+  return (await getOrderById(orderId))!;
+}
+
+/** Recusa a entrega de um pedido "recebido" — cancela e registra o motivo. */
+export async function rejectDelivery(
+  orderId: string,
+  reason: string | undefined,
+  adminId: string
+): Promise<OrderWithRelations> {
+  const existing = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existing) {
+    throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+  if (existing.deliveryType !== "entrega" || existing.status !== "recebido") {
+    throw new OrderServiceError(
+      "Este pedido não está aguardando aprovação de entrega.",
+      "NOT_PENDING_APPROVAL"
+    );
+  }
+
+  const updated = await prisma.order.updateMany({
+    where: { id: orderId, status: "recebido" },
+    data: { status: "cancelado", rejectionReason: reason || null },
+  });
+  if (updated.count === 0) {
+    throw new OrderServiceError(
+      "Este pedido já foi atualizado por outra pessoa. Atualize a tela e tente de novo.",
+      "STATUS_CONFLICT"
+    );
+  }
+  await prisma.orderStatusHistory.create({
+    data: { orderId, status: "cancelado", changedById: adminId },
+  });
+  return (await getOrderById(orderId))!;
+}
+
+/**
+ * Marca que o aviso de WhatsApp pra esse status já foi gerado/enviado —
+ * idempotente (adicionar um status já presente não duplica). O envio em si é
+ * manual (link wa.me clicado pelo admin); isso só evita que a tela ofereça
+ * "avisar" de novo pro mesmo status sem querer.
+ */
+export async function markStatusNotified(orderId: string, status: OrderStatus): Promise<OrderWithRelations> {
+  const existing = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existing) {
+    throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+  const notified = new Set(parseNotifiedStatuses(existing.notifiedStatuses));
+  notified.add(status);
+  return prisma.order.update({
+    where: { id: orderId },
+    data: { notifiedStatuses: JSON.stringify([...notified]) },
+    include: orderInclude,
+  });
 }
 
 export async function markOrderPrinted(orderId: string): Promise<OrderWithRelations> {

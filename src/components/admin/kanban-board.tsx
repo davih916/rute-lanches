@@ -20,6 +20,7 @@ import type { OrderWithRelations } from "@/lib/services/order-service";
 
 interface KanbanBoardProps {
   initialOrders: OrderWithRelations[];
+  storeName: string;
 }
 
 const ALARM_REPEAT_MS = 8000;
@@ -31,7 +32,7 @@ async function fetchOrders(): Promise<OrderWithRelations[]> {
   return data.orders;
 }
 
-export function KanbanBoard({ initialOrders }: KanbanBoardProps) {
+export function KanbanBoard({ initialOrders, storeName }: KanbanBoardProps) {
   const queryClient = useQueryClient();
   const knownOrderIds = useRef<Set<string>>(new Set(initialOrders.map((o) => o.id)));
   const isFirstRun = useRef(true);
@@ -132,7 +133,8 @@ export function KanbanBoard({ initialOrders }: KanbanBoardProps) {
         onSuccess: () => {
           const shouldAutoPrint =
             (previousStatus === "recebido" && status === "preparando") ||
-            (previousStatus === "preparando" && status === "saiu_entrega");
+            (previousStatus === "preparando" && status === "saiu_entrega") ||
+            (previousStatus === "preparando" && status === "pronto_retirada");
           if (shouldAutoPrint) {
             window.open(
               `/admin/comanda/${orderId}?autoprint=1`,
@@ -239,6 +241,7 @@ export function KanbanBoard({ initialOrders }: KanbanBoardProps) {
                             onAcknowledge={handleAcknowledge}
                             isUpdating={updatingId === order.id}
                             isNew={order.status === "recebido" && !acknowledgedIds.has(order.id)}
+                            storeName={storeName}
                           />
                         </motion.div>
                       ))}

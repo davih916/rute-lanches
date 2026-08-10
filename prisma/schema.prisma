@@ -184,7 +184,11 @@ model Order {
   customerId       String
   customer         Customer  @relation(fields: [customerId], references: [id])
   status           String    @default("recebido")
-  // "recebido" (novo pedido) | "preparando" | "saiu_entrega" | "entregue" | "cancelado"
+  // "recebido" (novo pedido — para entrega, também significa "aguardando
+  // confirmação da entrega" enquanto não for aprovado/recusado, ver §
+  // approveDelivery/rejectDelivery em order-service.ts) | "preparando" |
+  // "saiu_entrega" (só entrega) | "pronto_retirada" (só retirada/balcão) |
+  // "entregue" | "cancelado"
   deliveryType     String    @default("entrega")
   // "entrega" | "retirada" | "balcao" (venda no balcão, criada pelo admin)
   paymentMethod    String
@@ -194,10 +198,35 @@ model Order {
   cashChangeForCents Int? // troco: valor com que o cliente vai pagar (só quando paymentMethod = "dinheiro")
   wantsInvoice     Boolean   @default(false) // cliente marcou "quero nota fiscal" no checkout
   itemsTotalCents  Int
-  deliveryZoneId   String? // bairro escolhido (só entrega) — taxa em deliveryFeeCents já é o snapshot
+  // Endereço de entrega: SNAPSHOT no momento do pedido (não usa mais bairro
+  // pré-cadastrado — o cliente digita o próprio bairro). Guardado no Order
+  // (não só no Customer) porque o cadastro do Customer é mutável e um
+  // cliente pode pedir de endereços diferentes em pedidos diferentes;
+  // sem esse snapshot, pedidos antigos mostrariam o endereço ATUAL do
+  // cliente na hora de reimprimir a comanda, não o de quando pediu.
+  address          String?
+  addressNumber    String?
+  neighborhood     String?
+  complement       String?
+  reference        String?
+  // Mantido só por compatibilidade com pedidos antigos (feitos quando a
+  // entrega ainda usava bairro pré-cadastrado com taxa fixa) — pedidos novos
+  // não usam mais. Não é referenciado por nenhum fluxo de criação de pedido.
+  deliveryZoneId   String?
   deliveryZone     DeliveryZone? @relation(fields: [deliveryZoneId], references: [id], onDelete: Restrict)
+  // Para pedidos de entrega novos, começa em 0 e é definido pelo admin ao
+  // aprovar a entrega (approveDelivery) — sem bairro pré-cadastrado não dá
+  // pra calcular a taxa sozinho.
   deliveryFeeCents Int       @default(0)
   totalCents       Int
+  // Preenchido só quando a entrega é recusada pelo admin (rejectDelivery).
+  rejectionReason  String?
+  // JSON array de status ("preparando", "saiu_entrega", etc.) para os quais
+  // já foi gerado/confirmado o aviso de WhatsApp pro cliente — evita que o
+  // botão "Avisar cliente" seja clicado achando que ainda não avisou (ver
+  // src/lib/order-notifications.ts). Envio em si é manual (link wa.me), não
+  // uma API que garanta entrega — o registro é só de controle na tela.
+  notifiedStatuses String    @default("[]")
   notes            String?
   printedAt        DateTime?
   createdAt        DateTime  @default(now())

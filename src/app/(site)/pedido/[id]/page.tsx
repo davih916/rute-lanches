@@ -35,6 +35,8 @@ export default async function OrderConfirmationPage({
 
   const status = order.status as OrderStatus;
   const statusColor = ORDER_STATUS_COLORS[status];
+  const isDelivery = order.deliveryType === "entrega";
+  const deliveryPending = isDelivery && status === "recebido";
 
   return (
     <div className="mx-auto max-w-lg px-4 py-8">
@@ -88,12 +90,20 @@ export default async function OrderConfirmationPage({
             <span>Itens</span>
             <span>{formatCentsToBRL(order.itemsTotalCents)}</span>
           </div>
-          <div className="flex justify-between text-neutral-500">
-            <span>Entrega</span>
-            <span>{order.deliveryFeeCents > 0 ? formatCentsToBRL(order.deliveryFeeCents) : "Grátis"}</span>
-          </div>
+          {isDelivery && (
+            <div className="flex justify-between text-neutral-500">
+              <span>Entrega</span>
+              <span>
+                {deliveryPending
+                  ? "A combinar"
+                  : order.deliveryFeeCents > 0
+                    ? formatCentsToBRL(order.deliveryFeeCents)
+                    : "Grátis"}
+              </span>
+            </div>
+          )}
           <div className="flex justify-between text-base font-bold text-neutral-900">
-            <span>Total</span>
+            <span>{deliveryPending ? "Total (sem a entrega)" : "Total"}</span>
             <span>{formatCentsToBRL(order.totalCents)}</span>
           </div>
           <div className="flex justify-between text-neutral-500">
@@ -102,14 +112,23 @@ export default async function OrderConfirmationPage({
           </div>
         </div>
 
+        {deliveryPending && (
+          <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+            A loja está confirmando sua entrega — o valor final (com a taxa) é definido nessa
+            confirmação.
+          </p>
+        )}
+
         <div className="mt-4 border-t border-neutral-100 pt-4 text-sm text-neutral-600">
           <p className="font-medium text-neutral-800">{order.customer.name}</p>
           <p>{order.customer.phone}</p>
-          <p>
-            {order.customer.address}
-            {order.customer.addressNumber ? `, ${order.customer.addressNumber}` : ""}
-            {order.customer.neighborhood ? ` - ${order.customer.neighborhood}` : ""}
-          </p>
+          {isDelivery && (
+            <p>
+              {order.address}
+              {order.addressNumber ? `, ${order.addressNumber}` : ""}
+              {order.neighborhood ? ` - ${order.neighborhood}` : ""}
+            </p>
+          )}
         </div>
       </div>
 

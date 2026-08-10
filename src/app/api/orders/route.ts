@@ -29,12 +29,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ order }, { status: 201 });
   } catch (err) {
     if (err instanceof OrderServiceError) {
-      const status =
-        err.code === "STORE_CLOSED" ||
-        err.code === "PAYMENT_METHOD_DISABLED" ||
-        err.code === "DELIVERY_ZONE_UNAVAILABLE"
-          ? 409
-          : 400;
+      const status = err.code === "STORE_CLOSED" || err.code === "PAYMENT_METHOD_DISABLED" ? 409 : 400;
       return NextResponse.json({ error: err.message }, { status });
     }
     console.error("Erro ao criar pedido:", err);

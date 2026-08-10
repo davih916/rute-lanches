@@ -2,6 +2,7 @@ export const ORDER_STATUSES = [
   "recebido",
   "preparando",
   "saiu_entrega",
+  "pronto_retirada",
   "entregue",
   "cancelado",
 ] as const;
@@ -12,6 +13,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   recebido: "Novo pedido",
   preparando: "Preparando",
   saiu_entrega: "Saiu para entrega",
+  pronto_retirada: "Pronto para retirada",
   entregue: "Entregue",
   cancelado: "Cancelado",
 };
@@ -20,6 +22,7 @@ export const ORDER_STATUS_EMOJI: Record<OrderStatus, string> = {
   recebido: "\u{1F534}",
   preparando: "\u{1F7E1}",
   saiu_entrega: "\u{1F535}",
+  pronto_retirada: "\u{1F7E3}",
   entregue: "\u{1F7E2}",
   cancelado: "❌",
 };
@@ -28,27 +31,61 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, { bg: string; text: string
   recebido: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
   preparando: { bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-500" },
   saiu_entrega: { bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-500" },
+  pronto_retirada: { bg: "bg-purple-50", text: "text-purple-700", dot: "bg-purple-500" },
   entregue: { bg: "bg-emerald-50", text: "text-emerald-700", dot: "bg-emerald-500" },
   cancelado: { bg: "bg-neutral-100", text: "text-neutral-500", dot: "bg-neutral-400" },
 };
 
-/** Próximo status sugerido no fluxo normal do Kanban (null = status final). */
-export const NEXT_STATUS: Record<OrderStatus, OrderStatus | null> = {
-  recebido: "preparando",
-  preparando: "saiu_entrega",
-  saiu_entrega: "entregue",
-  entregue: null,
-  cancelado: null,
+/**
+ * O fluxo de status depende do tipo de entrega: "entrega" passa por
+ * "saiu_entrega", "retirada"/"balcao" passam por "pronto_retirada" — nunca os
+ * dois. Pedidos de entrega em "recebido" não usam este mapa: precisam ser
+ * aprovados/recusados primeiro (ver approveDelivery/rejectDelivery), então o
+ * botão nessa etapa não é um simples "próximo status".
+ */
+const NEXT_STATUS_BY_TYPE: Record<DeliveryType, Partial<Record<OrderStatus, OrderStatus>>> = {
+  entrega: {
+    preparando: "saiu_entrega",
+    saiu_entrega: "entregue",
+  },
+  retirada: {
+    recebido: "preparando",
+    preparando: "pronto_retirada",
+    pronto_retirada: "entregue",
+  },
+  balcao: {
+    recebido: "preparando",
+    preparando: "pronto_retirada",
+    pronto_retirada: "entregue",
+  },
 };
 
-/** Texto do botão de ação principal de cada status (mais claro que o nome do próximo status). */
-export const NEXT_STATUS_ACTION_LABEL: Record<OrderStatus, string | null> = {
-  recebido: "Aceitar pedido",
-  preparando: "Saiu para entrega",
-  saiu_entrega: "Marcar como entregue",
-  entregue: null,
-  cancelado: null,
+const NEXT_STATUS_ACTION_LABEL_BY_TYPE: Record<DeliveryType, Partial<Record<OrderStatus, string>>> = {
+  entrega: {
+    preparando: "Saiu para entrega",
+    saiu_entrega: "Marcar como entregue",
+  },
+  retirada: {
+    recebido: "Aceitar pedido",
+    preparando: "Pronto para retirada",
+    pronto_retirada: "Marcar como entregue",
+  },
+  balcao: {
+    recebido: "Aceitar pedido",
+    preparando: "Pronto para retirada",
+    pronto_retirada: "Marcar como entregue",
+  },
 };
+
+/** Próximo status sugerido no fluxo normal do Kanban (null = status final ou exige aprovação). */
+export function getNextStatus(status: OrderStatus, deliveryType: DeliveryType): OrderStatus | null {
+  return NEXT_STATUS_BY_TYPE[deliveryType][status] ?? null;
+}
+
+/** Texto do botão de ação principal (mais claro que o nome do próximo status). */
+export function getNextStatusActionLabel(status: OrderStatus, deliveryType: DeliveryType): string | null {
+  return NEXT_STATUS_ACTION_LABEL_BY_TYPE[deliveryType][status] ?? null;
+}
 
 export const PAYMENT_METHODS = ["pix", "dinheiro", "cartao_credito", "cartao_debito", "whatsapp"] as const;
 

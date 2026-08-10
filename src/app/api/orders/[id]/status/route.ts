@@ -31,7 +31,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     // registrados no próprio pedido (fiscal.status/errorMessage) — o lojista
     // resolve depois pelo botão manual existente, sem travar a mudança de status.
     if (
-      parsed.data.status === "saiu_entrega" &&
+      (parsed.data.status === "saiu_entrega" || parsed.data.status === "pronto_retirada") &&
       order.wantsInvoice &&
       order.fiscal?.status !== "emitida"
     ) {
@@ -50,7 +50,12 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     return NextResponse.json({ order });
   } catch (err) {
     if (err instanceof OrderServiceError) {
-      const status = err.code === "STATUS_CONFLICT" ? 409 : 404;
+      const status =
+        err.code === "STATUS_CONFLICT"
+          ? 409
+          : err.code === "INVALID_STATUS_TRANSITION"
+            ? 400
+            : 404;
       return NextResponse.json({ error: err.message }, { status });
     }
     console.error("Erro ao atualizar status do pedido:", err);
