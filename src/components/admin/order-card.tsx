@@ -19,6 +19,7 @@ import {
 } from "@/lib/constants";
 import {
   getStatusNotificationMessage,
+  getDeliveryApprovedMessage,
   getDeliveryRejectionMessage,
   buildCustomerNotificationLink,
   parseNotifiedStatuses,
@@ -89,6 +90,17 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
       }
       toast.success("Entrega aprovada — pedido em preparo.");
       window.open(`/admin/comanda/${order.id}?autoprint=1`, "_blank", "width=380,height=640");
+      if (order.customer.phone) {
+        const message = getDeliveryApprovedMessage({
+          orderNumber: order.orderNumber,
+          customerName: order.customer.name,
+          customerPhone: order.customer.phone,
+          storeName,
+          items: order.items.map((item) => ({ productName: item.productName, quantity: item.quantity })),
+          totalCents: order.itemsTotalCents + feeCents,
+        });
+        window.open(buildCustomerNotificationLink(order.customer.phone, message), "_blank", "noopener,noreferrer");
+      }
       await refreshOrders();
     } catch {
       toast.error("Falha de conexão.");
@@ -204,7 +216,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
             {order.reference && (
               <p className="text-sm text-neutral-400">Referência: {order.reference}</p>
             )}
-            {!awaitingDeliveryApproval && (
+            {!awaitingDeliveryApproval && !(status === "cancelado" && order.rejectionReason) && (
               <p className="text-sm font-medium text-neutral-400">
                 Taxa de entrega: {formatCentsToBRL(order.deliveryFeeCents)}
               </p>
