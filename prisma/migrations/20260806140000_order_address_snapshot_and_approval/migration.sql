@@ -15,9 +15,11 @@ UPDATE "orders" o
 SET
   "address" = c."address",
   "addressNumber" = c."addressNumber",
-  "neighborhood" = COALESCE(dz."neighborhood", c."neighborhood"),
+  "neighborhood" = COALESCE(
+    (SELECT dz."neighborhood" FROM "delivery_zones" dz WHERE dz."id" = o."deliveryZoneId"),
+    c."neighborhood"
+  ),
   "complement" = c."complement",
   "reference" = c."reference"
 FROM "customers" c
-LEFT JOIN "delivery_zones" dz ON dz."id" = o."deliveryZoneId"
 WHERE o."customerId" = c."id";
