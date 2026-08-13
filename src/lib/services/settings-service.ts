@@ -42,6 +42,7 @@ export async function getSettingsSafe(): Promise<Settings> {
       acceptedPaymentMethods: "[]",
       pixKey: null,
       pixCity: "SOROCABA",
+      mensalidadePagaEm: null,
       deliveryFeeCents: 0,
       minOrderCents: 0,
       receiptWidth: "80mm",
@@ -71,5 +72,21 @@ export async function updateSettings(data: UpdateSettingsData): Promise<Settings
     where: { id: DEFAULT_SETTINGS_ID },
     update: data,
     create: { id: DEFAULT_SETTINGS_ID, ...data },
+  });
+}
+
+/** "YYYY-MM" do mês corrente — usado tanto pra decidir se mostra o banner de
+ * cobrança quanto pra marcar que aquele mês específico já foi pago. */
+export function currentBillingMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Painel /admin/dev: marca a mensalidade do mês corrente como paga (some com o banner de cobrança). */
+export async function confirmMensalidadePaid(): Promise<Settings> {
+  return prisma.settings.upsert({
+    where: { id: DEFAULT_SETTINGS_ID },
+    update: { mensalidadePagaEm: currentBillingMonth() },
+    create: { id: DEFAULT_SETTINGS_ID, mensalidadePagaEm: currentBillingMonth() },
   });
 }

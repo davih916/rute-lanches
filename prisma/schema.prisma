@@ -309,6 +309,12 @@ model Settings {
   // depende de conta/API do PagBank. Se vazia, o Pix fica indisponível.
   pixKey           String?
   pixCity          String   @default("SOROCABA") // cidade do recebedor exigida no payload do BR Code Pix (sem acentos, maiúsculas)
+  // Mês (formato "YYYY-MM") em que a mensalidade de manutenção do sistema foi
+  // confirmada como paga — controla o banner de cobrança no fim do mês (ver
+  // src/app/admin/dev/page.tsx e §9.2 do HANDOFF). Não é visível/editável pela
+  // dona da loja, só pelo painel /admin/dev (senha própria, separada do login
+  // dela).
+  mensalidadePagaEm String?
   deliveryFeeCents Int      @default(0)
   minOrderCents    Int      @default(0)
   receiptWidth     String   @default("80mm") // "58mm" | "80mm"

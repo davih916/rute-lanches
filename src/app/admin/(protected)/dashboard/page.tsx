@@ -2,6 +2,7 @@ import Link from "next/link";
 import { Plus } from "lucide-react";
 import { KanbanBoard } from "@/components/admin/kanban-board";
 import { TodayStatsBar } from "@/components/admin/today-stats";
+import { BillingReminderBanner } from "@/components/admin/billing-reminder-banner";
 import { Button } from "@/components/ui/button";
 import { listOrders, listPendingPixPayments, getTodayStats } from "@/lib/services/order-service";
 import { getSettings } from "@/lib/services/settings-service";
@@ -28,6 +29,7 @@ export default async function AdminDashboardPage() {
           </Button>
         </Link>
       </header>
+      <BillingReminderBanner storeName={settings.storeName} mensalidadePagaEm={settings.mensalidadePagaEm} />
       <TodayStatsBar stats={stats} />
       <div className="min-h-0 flex-1 overflow-hidden">
         <KanbanBoard
