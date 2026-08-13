@@ -3,11 +3,16 @@ import { Plus } from "lucide-react";
 import { KanbanBoard } from "@/components/admin/kanban-board";
 import { TodayStatsBar } from "@/components/admin/today-stats";
 import { Button } from "@/components/ui/button";
-import { listOrders, getTodayStats } from "@/lib/services/order-service";
+import { listOrders, listPendingPixPayments, getTodayStats } from "@/lib/services/order-service";
 import { getSettings } from "@/lib/services/settings-service";
 
 export default async function AdminDashboardPage() {
-  const [orders, stats, settings] = await Promise.all([listOrders(), getTodayStats(), getSettings()]);
+  const [orders, pendingPixPayments, stats, settings] = await Promise.all([
+    listOrders(),
+    listPendingPixPayments(),
+    getTodayStats(),
+    getSettings(),
+  ]);
 
   return (
     <div className="flex h-full flex-col">
@@ -25,7 +30,11 @@ export default async function AdminDashboardPage() {
       </header>
       <TodayStatsBar stats={stats} />
       <div className="min-h-0 flex-1 overflow-hidden">
-        <KanbanBoard initialOrders={orders} storeName={settings.storeName} />
+        <KanbanBoard
+          initialOrders={orders}
+          initialPendingPixPayments={pendingPixPayments}
+          storeName={settings.storeName}
+        />
       </div>
     </div>
   );

@@ -23,6 +23,8 @@ export async function PATCH(request: Request) {
     ...parsed.data,
     whatsapp: parsed.data.whatsapp || undefined,
     address: parsed.data.address || undefined,
+    pixKey: parsed.data.pixKey || undefined,
+    pixCity: parsed.data.pixCity || undefined,
     openingHours: JSON.stringify(parsed.data.openingHours),
     acceptedPaymentMethods: JSON.stringify(parsed.data.acceptedPaymentMethods),
   });

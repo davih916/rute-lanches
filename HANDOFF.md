@@ -4,7 +4,12 @@
 > conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
 > algo mudar de forma relevante, atualize este arquivo.
 >
-> Última atualização: 2026-08-06 (reformulação grande do fluxo de pedidos: endereço/bairro
+> Última atualização: 2026-08-13 (pedidos do cliente pós-lançamento: chave Pix simples com
+> QR Code gerado localmente, sem depender do PagBank — ver §10.1; pedido Pix só entra no
+> Kanban depois que o admin confirma manualmente o pagamento — ver §6.2; botão pra ocultar
+> os valores de venda no dashboard, já que a tela fica visível pra qualquer um perto do
+> balcão — ver §9.1). Atualização anterior (2026-08-06): reformulação grande do fluxo de
+> pedidos: endereço/bairro
 > digitado livremente, aprovação manual da entrega pelo admin, status "Pronto para
 > retirada" separado de "Saiu para entrega", comanda reescrita com endereço/pagamento
 > completos, avisos de WhatsApp pro cliente via link manual — ver §6 e §6.1). Atualização
@@ -265,7 +270,7 @@ PagBankConfig      (singleton, id fixo "default")
 | `Order` | pedido | `status` (kanban), `paymentStatus` (Pix), `deliveryType`, `wantsInvoice`, `paymentMethod`, `address`/`addressNumber`/`neighborhood`/`complement`/`reference` (snapshot do endereço digitado, só entrega — ver §6.1), `rejectionReason`, `notifiedStatuses` |
 | `OrderItem` / `OrderItemAddon` | itens do pedido | snapshot de nome/preço no momento da compra |
 | `OrderStatusHistory` | auditoria de mudança de status | |
-| `Settings` | configuração da loja | cores, horário, forma de pagamento aceita, etc. |
+| `Settings` | configuração da loja | cores, horário, forma de pagamento aceita, `pixKey`/`pixCity` (chave Pix simples — ver §10.1), etc. |
 | `Fiscal` | NFC-e de um pedido | 1:1 com `Order`, criado junto (`aguardando_emissao`) |
 | `FiscalConfig` | dados cadastrais da empresa emitente | **não** guarda mais credenciais (ver §11/§20) |
 | `PagBankConfig` | credenciais do PagBank | client_id/secret/token **criptografados** no banco |
@@ -273,11 +278,13 @@ PagBankConfig      (singleton, id fixo "default")
 
 ### Campos de "status" (strings, não enum nativo)
 
-- `Order.status`: `"recebido" | "preparando" | "saiu_entrega" | "pronto_retirada" | "entregue" | "cancelado"`
+- `Order.status`: `"aguardando_pagamento" | "recebido" | "preparando" | "saiu_entrega" | "pronto_retirada" | "entregue" | "cancelado"`
   — `"saiu_entrega"` só pra `deliveryType="entrega"`, `"pronto_retirada"` só pra
   `"retirada"`/`"balcao"` (nunca os dois; ver `getNextStatus`/`getNextStatusActionLabel`
   em `src/lib/constants.ts`). `"recebido"` + `"entrega"` significa "aguardando
-  confirmação da entrega" — ver §6.1.
+  confirmação da entrega" — ver §6.1. `"aguardando_pagamento"` só existe pra pedidos
+  Pix pagos com a chave simples (ver §10.1/§6.2) — fica **fora do Kanban** até o admin
+  confirmar manualmente.
 - `Order.deliveryType`: `"entrega" | "retirada" | "balcao"`
 - `Order.paymentMethod`: `"pix" | "dinheiro" | "cartao_credito" | "cartao_debito"`
 - `Order.paymentStatus`: `"pendente" | "pago" | "erro"`
@@ -308,6 +315,7 @@ PagBankConfig      (singleton, id fixo "default")
 | `20260714170000_add_missing_fk_indexes` | índices que faltavam em FKs (`customerId`, `deliveryZoneId`, `productId`) |
 | `20260801230000_add_delivery_zone_visibility` | `DeliveryZone.visibleToCustomers` (hoje sem uso prático — ver `20260806140000` abaixo) |
 | `20260806140000_order_address_snapshot_and_approval` | `Order.address/addressNumber/neighborhood/complement/reference` (snapshot), `Order.rejectionReason`, `Order.notifiedStatuses` — ver §6.1. Faz backfill dos pedidos existentes a partir do Customer/DeliveryZone vinculado. |
+| `20260813150000_pix_key_and_payment_gate` | `Settings.pixKey`/`Settings.pixCity` — ver §10.1. (`Order.status="aguardando_pagamento"` é só um novo valor de string, não precisa de migration — ver §6.2.) |
 
 ⚠️ **Nota histórica**: existe uma migration `20260703143145_init_postgres` registrada na
 tabela `_prisma_migrations` do banco de produção que **não tem pasta correspondente** no
@@ -368,6 +376,12 @@ Cliente é redirecionado pra /pedido/[id] — mostra status, resumo, e:
   - se "Combinar pelo WhatsApp" (ver abaixo): WhatsAppOrderPanel com botão de confirmação
   - se entrega: total mostrado é só dos itens ("Total (sem a entrega)") — a taxa vira "A
     combinar" até o admin aprovar (ver §6.1)
+   ↓
+Se for Pix E a loja tiver `Settings.pixKey` cadastrada: o pedido nasce em
+`status="aguardando_pagamento"` — NÃO aparece no Kanban ainda (fica num banner
+separado até o admin confirmar o pagamento manualmente, ver §6.2/§10.1). Nos
+outros casos (Pix sem chave cadastrada, dinheiro, cartão, combinar por WhatsApp),
+segue direto pro fluxo normal abaixo.
    ↓
 Pedido aparece no Kanban do admin (poll a cada 5s) em "Novo pedido"
    ↓
@@ -456,6 +470,43 @@ contratar a API oficial ficou de fora por enquanto).
   `deliveryType="entrega"` é escolhido ali — mesmo caminho único de código, sem duplicar
   lógica. Na prática, se o funcionário já sabe a taxa (está com o cliente/telefone na
   mão), ele mesmo aprova o próprio pedido logo em seguida no Kanban.
+
+### 6.2 Pedido Pix só "entra" após confirmação de pagamento (2026-08-13)
+
+Pedido a pedido do cliente: valores de venda expostos na tela do Kanban e Pix
+que os clientes não conseguiam pagar (não tinha chave Pix cadastrada) — ver
+§10.1 pra chave Pix e §9.1 pra ocultar valores. Este item é o "só lançar o
+pedido depois do pagamento".
+
+Só se aplica a **Pix com chave simples cadastrada** (`Settings.pixKey`
+preenchida) — dinheiro/cartão são pagos na entrega/retirada, não tem como
+confirmar antes, então continuam entrando direto no Kanban como sempre.
+Pix sem chave cadastrada (fluxo legado do PagBank, que já confirma sozinho
+pelo webhook) também não passa por aqui.
+
+```
+createOrder(): se paymentMethod="pix" E Settings.pixKey preenchida →
+  Order nasce com status="aguardando_pagamento" (constante em
+  src/lib/constants.ts, isValidStatusTransition só permite ir daqui pra
+  "cancelado" ou, via confirmPixPayment, pra "recebido")
+   ↓
+listOrders() (usada pelo Kanban) EXCLUI status="aguardando_pagamento" — o
+pedido não aparece nas colunas normais. listPendingPixPayments() lista só
+esses, usada no banner laranja acima do Kanban (kanban-board.tsx), com
+nome/valor/nº do pedido e botão "Confirmar pagamento".
+   ↓
+Admin confere o Pix caído no aplicativo do banco (não existe confirmação
+automática — é um QR estático, sem webhook) e clica "Confirmar pagamento"
+   ↓
+POST /api/orders/[id]/confirm-payment → confirmPixPayment() em
+order-service.ts: muda status→"recebido" + paymentStatus→"pago", grava
+OrderStatusHistory — dali em diante segue o fluxo normal (inclusive
+aprovação de entrega, se for o caso — ver §6.1).
+```
+
+Enquanto "aguardando_pagamento", o pedido também fica de fora do cálculo de
+`getTodayStats()` (não conta como vendido nem como pedido em aberto) — só
+passa a contar depois que o pagamento é confirmado.
 
 ### Forma de pagamento "Combinar pelo WhatsApp"
 
@@ -573,6 +624,14 @@ Emissão de nota por pedido continua existindo via `FiscalAction`
   `order-service.ts`): além de pedidos/faturamento/ticket médio do dia, agora mostra
   **pedidos em aberto** (qualquer dia, não só hoje) e **top 5 produtos mais vendidos hoje**
   (via `prisma.orderItem.groupBy`).
+- **Ocultar valores em dinheiro (2026-08-13)**: pedido do cliente ("os valores ficam
+  expostos a todos") — a tela do Kanban fica visível pra qualquer pessoa perto do
+  balcão, não só pro admin. Botão "Mostrar/Ocultar valores" no topo de `TodayStatsBar`
+  (`today-stats.tsx`) borra (`blur-sm`) "Vendido hoje"/"Ticket médio"; **oculto por
+  padrão**, preferência salva em `localStorage` (`rl_admin_hide_values`) por
+  navegador/dispositivo — não é uma configuração de servidor. Só afeta os totais
+  agregados do dashboard; totais de pedido individual no Kanban continuam visíveis
+  (o funcionário precisa deles pra cobrar/conferir o pedido).
 - **Busca e filtros no Kanban** (`kanban-board.tsx`): campo de busca (nome/telefone/número
   do pedido) e chips de filtro por tipo de entrega — filtragem 100% client-side sobre os
   pedidos já carregados, não afeta o polling nem o alerta sonoro (que continuam olhando
@@ -610,30 +669,41 @@ Emissão de nota por pedido continua existindo via `FiscalAction`
 
 ---
 
-## 10. Fluxo do PagBank (Pix)
+## 10. Fluxo do Pix
 
-### Configuração
-Feita pelo painel (`/admin/configuracoes` → bloco PagBank), **não por variável de
-ambiente** — client_id/secret/token ficam **criptografados** (AES-256-GCM,
-`src/lib/crypto.ts`, chave `FISCAL_ENCRYPTION_KEY`) na tabela `pagbank_config`. Botão
-"Testar conexão" faz uma chamada autenticada simples pra validar as credenciais.
+### 10.1 Chave Pix simples (caminho principal, desde 2026-08-13)
 
-### Geração da cobrança
+A loja não precisa de conta/API do PagBank pra receber Pix. Em
+`/admin/configuracoes` o admin cadastra `Settings.pixKey` (CPF/CNPJ/e-mail/
+telefone/chave aleatória) e `Settings.pixCity`. Com isso:
 
 ```
-Pedido criado com paymentMethod="pix" → /pedido/[id] (ou tela Nova Venda) renderiza
-PixPaymentPanel → GET /api/orders/[id]/pix
-   ↓
-getOrCreatePixCharge() [src/lib/services/pagbank-service.ts]
-  - se já existe PixCharge pro pedido, retorna (idempotente — protegido contra
-    race condition com upsert-like try/catch em cima do unique constraint)
-  - senão: POST na API do PagBank (Orders API, qr_codes), salva
-    externalId/qrCodeText/qrCodeImageUrl
-   ↓
-PixPaymentPanel faz polling (5s) no mesmo endpoint até status="pago"
+Pedido criado com paymentMethod="pix" → /pedido/[id] renderiza PixPaymentPanel
+  → GET /api/orders/[id]/pix → getOrCreatePixCharge() [pagbank-service.ts]
+  - se Settings.pixKey estiver preenchida: gera o BR Code (Pix "copia e cola")
+    localmente com generatePixBRCode() [src/lib/pix-brcode.ts] — payload EMV
+    padrão Banco Central (chave + valor do pedido + CRC16), sem chamar API
+    nenhuma — e renderiza o QR Code (pacote `qrcode`, imagem data: URL)
+  - se não houver chave cadastrada: cai no fluxo legado do PagBank (ver 10.2)
 ```
 
-### Confirmação (webhook)
+**Não existe confirmação automática nesse caminho** (não há webhook — é só um
+QR estático). O pedido fica com `status="aguardando_pagamento"` (fora do
+Kanban, ver §6.2) até o admin conferir o Pix caído no aplicativo do próprio
+banco e clicar em "Confirmar pagamento" no banner laranja acima do Kanban
+(`POST /api/orders/[id]/confirm-payment` → `confirmPixPayment()` em
+`order-service.ts`), que move o pedido pra `status="recebido"` e
+`paymentStatus="pago"`.
+
+### 10.2 PagBank (legado, mantido por compatibilidade)
+
+Só é usado se `Settings.pixKey` estiver vazia. Configuração pelo painel
+(`/admin/configuracoes` → bloco PagBank) — client_id/secret/token ficam
+**criptografados** (AES-256-GCM, `src/lib/crypto.ts`, chave
+`FISCAL_ENCRYPTION_KEY`) na tabela `pagbank_config`. Nesse caminho o pedido
+Pix **não** passa por `aguardando_pagamento` — cria direto em "recebido"
+(igual às outras formas de pagamento) porque a confirmação chega sozinha pelo
+webhook:
 
 ```
 PagBank → POST /api/webhooks/pagbank (SEM autenticação de assinatura — ver §21)
@@ -1028,6 +1098,16 @@ auditoria de código), do mais recente ao mais antigo:
 - **Snapshot de endereço em pedidos anteriores a 2026-08-06**: preenchido por migração a
   partir do cadastro do Customer/DeliveryZone na época da migração, não do que estava
   valendo quando aquele pedido específico foi feito (ver §6.1).
+- **Confirmação de pagamento Pix (chave simples) é 100% manual** (ver §6.2/§10.1): como é
+  um QR estático gerado localmente (sem API/webhook), não existe forma de confirmar
+  sozinho que o Pix caiu — o admin precisa conferir no aplicativo do banco e clicar
+  "Confirmar pagamento". Se ele esquecer, o pedido fica parado indefinidamente no banner
+  (fora do Kanban) — não há lembrete/alerta sonoro pra isso hoje (só existe pra pedidos já
+  confirmados, "recebido"). Se isso incomodar na prática, dá pra reaproveitar o mesmo
+  alarme sonoro do Kanban pra esses também.
+- **Sem timeout/expiração pro banner de "aguardando pagamento" do Pix**: um pedido nessa
+  fila fica lá para sempre até alguém confirmar ou cancelar manualmente — não existe
+  cancelamento automático de pedido Pix "esquecido".
 
 ---
 

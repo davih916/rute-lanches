@@ -40,6 +40,8 @@ export async function getSettingsSafe(): Promise<Settings> {
       storeOpen: false,
       openingHours: "{}",
       acceptedPaymentMethods: "[]",
+      pixKey: null,
+      pixCity: "SOROCABA",
       deliveryFeeCents: 0,
       minOrderCents: 0,
       receiptWidth: "80mm",
@@ -58,6 +60,8 @@ export interface UpdateSettingsData {
   storeOpen: boolean;
   openingHours: string; // JSON serializado (ver src/lib/opening-hours.ts)
   acceptedPaymentMethods: string; // JSON array serializado (ver src/lib/constants.ts)
+  pixKey?: string;
+  pixCity?: string;
   minOrderCents: number;
   receiptWidth: string;
 }

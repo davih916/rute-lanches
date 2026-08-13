@@ -21,6 +21,7 @@ export class OrderServiceError extends Error {
       | "STATUS_CONFLICT"
       | "INVALID_STATUS_TRANSITION"
       | "NOT_PENDING_APPROVAL"
+      | "NOT_PENDING_PAYMENT"
   ) {
     super(message);
     this.name = "OrderServiceError";
@@ -133,6 +134,14 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
     },
   });
 
+  // Pedido por Pix com chave cadastrada: só "entra" de verdade (aparece no
+  // Kanban) depois que o admin confirmar manualmente que o pagamento caiu —
+  // ver confirmPixPayment. Sem chave Pix configurada, não tem como gatear
+  // (não existe confirmação automática nem manual possível), então segue
+  // igual às outras formas de pagamento.
+  const initialStatus: OrderStatus =
+    input.paymentMethod === "pix" && settings.pixKey?.trim() ? "aguardando_pagamento" : "recebido";
+
   const order = await prisma.$transaction(async (tx) => {
     // Seguro contra pedidos concorrentes gerarem o mesmo número: o UPDATE do
     // Postgres bloqueia a linha "default" até a transação concorrente
@@ -147,7 +156,7 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
       data: {
         orderNumber: updatedSettings.lastOrderNumber,
         customerId: customer.id,
-        status: "recebido",
+        status: initialStatus,
         deliveryType: input.deliveryType,
         paymentMethod: input.paymentMethod,
         wantsInvoice: input.wantsInvoice,
@@ -165,7 +174,7 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
         totalCents,
         notes: input.notes || null,
         items: { create: itemsData },
-        statusHistory: { create: { status: "recebido" } },
+        statusHistory: { create: { status: initialStatus } },
         fiscal: {
           create: {
             customerDocument: input.cpfCnpj || null,
@@ -186,6 +195,7 @@ export async function listOrders(): Promise<OrderWithRelations[]> {
 
   return prisma.order.findMany({
     where: {
+      status: { not: "aguardando_pagamento" },
       OR: [
         { status: { notIn: ["entregue", "cancelado"] } },
         { createdAt: { gte: startOfToday } },
@@ -194,6 +204,15 @@ export async function listOrders(): Promise<OrderWithRelations[]> {
     include: orderInclude,
     orderBy: { createdAt: "desc" },
     take: 200,
+  });
+}
+
+/** Pedidos Pix ainda não confirmados manualmente — ficam fora do Kanban até o admin confirmar. */
+export async function listPendingPixPayments(): Promise<OrderWithRelations[]> {
+  return prisma.order.findMany({
+    where: { status: "aguardando_pagamento" },
+    include: orderInclude,
+    orderBy: { createdAt: "asc" },
   });
 }
 
@@ -214,6 +233,9 @@ function isValidStatusTransition(
   deliveryType: DeliveryType
 ): boolean {
   if (current === "entregue" || current === "cancelado") return false;
+  // "aguardando_pagamento" só sai via confirmPixPayment (pagamento confirmado)
+  // ou cancelamento — nunca pelo fluxo genérico de "próximo status".
+  if (current === "aguardando_pagamento") return next === "cancelado";
   if (next === "cancelado") return true;
   if (current === "recebido" && deliveryType === "entrega") return false;
   return getNextStatus(current, deliveryType) === next;
@@ -311,6 +333,39 @@ export async function approveDelivery(
   return (await getOrderById(orderId))!;
 }
 
+/**
+ * Confirma manualmente que o Pix de um pedido "aguardando_pagamento" caiu —
+ * o admin confere no aplicativo do banco e clica em "Confirmar pagamento" no
+ * Kanban (não existe confirmação automática, ver src/lib/pix-brcode.ts).
+ * Move o pedido pra "recebido", de onde segue o fluxo normal (ou aprovação de
+ * entrega, se for o caso).
+ */
+export async function confirmPixPayment(orderId: string, adminId: string): Promise<OrderWithRelations> {
+  const existing = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existing) {
+    throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+  if (existing.status !== "aguardando_pagamento") {
+    throw new OrderServiceError("Este pedido não está aguardando pagamento.", "NOT_PENDING_PAYMENT");
+  }
+
+  const updated = await prisma.order.updateMany({
+    where: { id: orderId, status: "aguardando_pagamento" },
+    data: { status: "recebido", paymentStatus: "pago" },
+  });
+  if (updated.count === 0) {
+    throw new OrderServiceError(
+      "Este pedido já foi atualizado por outra pessoa. Atualize a tela e tente de novo.",
+      "STATUS_CONFLICT"
+    );
+  }
+  await prisma.pixCharge.updateMany({ where: { orderId }, data: { status: "pago", paidAt: new Date() } });
+  await prisma.orderStatusHistory.create({
+    data: { orderId, status: "recebido", changedById: adminId },
+  });
+  return (await getOrderById(orderId))!;
+}
+
 /** Recusa a entrega de um pedido "recebido" — cancela e registra o motivo. */
 export async function rejectDelivery(
   orderId: string,
@@ -402,15 +457,15 @@ export async function getTodayStats(): Promise<TodayStats> {
 
   const [orders, pendingOrders, topItems] = await Promise.all([
     prisma.order.findMany({
-      where: { createdAt: { gte: startOfToday }, status: { not: "cancelado" } },
+      where: { createdAt: { gte: startOfToday }, status: { notIn: ["cancelado", "aguardando_pagamento"] } },
       select: { totalCents: true },
     }),
     prisma.order.count({
-      where: { status: { notIn: ["entregue", "cancelado"] } },
+      where: { status: { notIn: ["entregue", "cancelado", "aguardando_pagamento"] } },
     }),
     prisma.orderItem.groupBy({
       by: ["productId", "productName"],
-      where: { order: { createdAt: { gte: startOfToday }, status: { not: "cancelado" } } },
+      where: { order: { createdAt: { gte: startOfToday }, status: { notIn: ["cancelado", "aguardando_pagamento"] } } },
       _sum: { quantity: true },
       orderBy: { _sum: { quantity: "desc" } },
       take: 5,

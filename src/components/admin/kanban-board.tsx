@@ -3,9 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { Search, X } from "lucide-react";
+import { Search, X, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { OrderCard } from "@/components/admin/order-card";
+import { Button } from "@/components/ui/button";
+import { formatCentsToBRL } from "@/lib/money";
+import { formatOrderNumber } from "@/lib/format";
 import {
   ORDER_STATUSES,
   ORDER_STATUS_LABELS,
@@ -20,31 +23,45 @@ import type { OrderWithRelations } from "@/lib/services/order-service";
 
 interface KanbanBoardProps {
   initialOrders: OrderWithRelations[];
+  initialPendingPixPayments: OrderWithRelations[];
   storeName: string;
 }
 
 const ALARM_REPEAT_MS = 8000;
+// A coluna "aguardando_pagamento" nunca aparece no board — esses pedidos
+// ficam escondidos até o pagamento ser confirmado (ver banner abaixo).
+const BOARD_STATUSES = ORDER_STATUSES.filter((s) => s !== "aguardando_pagamento");
 
-async function fetchOrders(): Promise<OrderWithRelations[]> {
-  const res = await fetch("/api/orders", { cache: "no-store" });
-  if (!res.ok) throw new Error("Falha ao buscar pedidos");
-  const data = await res.json();
-  return data.orders;
+interface OrdersResponse {
+  orders: OrderWithRelations[];
+  pendingPixPayments: OrderWithRelations[];
 }
 
-export function KanbanBoard({ initialOrders, storeName }: KanbanBoardProps) {
+async function fetchOrders(): Promise<OrdersResponse> {
+  const res = await fetch("/api/orders", { cache: "no-store" });
+  if (!res.ok) throw new Error("Falha ao buscar pedidos");
+  return res.json();
+}
+
+export function KanbanBoard({ initialOrders, initialPendingPixPayments, storeName }: KanbanBoardProps) {
   const queryClient = useQueryClient();
   const knownOrderIds = useRef<Set<string>>(new Set(initialOrders.map((o) => o.id)));
   const isFirstRun = useRef(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [confirmingPixId, setConfirmingPixId] = useState<string | null>(null);
   const [acknowledgedIds, setAcknowledgedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [deliveryFilter, setDeliveryFilter] = useState<DeliveryType | "todos">("todos");
 
-  const { data: allOrders = initialOrders } = useQuery({
+  const {
+    data: { orders: allOrders, pendingPixPayments } = {
+      orders: initialOrders,
+      pendingPixPayments: initialPendingPixPayments,
+    },
+  } = useQuery({
     queryKey: ["orders"],
     queryFn: fetchOrders,
-    initialData: initialOrders,
+    initialData: { orders: initialOrders, pendingPixPayments: initialPendingPixPayments },
     refetchInterval: 5000,
   });
 
@@ -153,8 +170,59 @@ export function KanbanBoard({ initialOrders, storeName }: KanbanBoardProps) {
     );
   }
 
+  async function handleConfirmPixPayment(orderId: string, orderNumber: number) {
+    setConfirmingPixId(orderId);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/confirm-payment`, { method: "POST" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(data?.error ?? "Falha ao confirmar pagamento.");
+        return;
+      }
+      toast.success(`Pagamento do pedido ${formatOrderNumber(orderNumber)} confirmado.`);
+      queryClient.invalidateQueries({ queryKey: ["orders"] });
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setConfirmingPixId(null);
+    }
+  }
+
   return (
     <div className="flex h-full flex-col" onClick={unlockAudio}>
+      {pendingPixPayments.length > 0 && (
+        <div className="flex flex-col gap-2 border-b border-orange-200 bg-orange-50 px-6 py-3">
+          <p className="flex items-center gap-1.5 text-xs font-semibold text-orange-700">
+            <Wallet className="size-3.5" />
+            {pendingPixPayments.length} pedido(s) aguardando confirmação de pagamento Pix — confira no
+            app do seu banco antes de confirmar.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {pendingPixPayments.map((order) => (
+              <div
+                key={order.id}
+                className="flex items-center gap-2 rounded-lg border border-orange-200 bg-white px-3 py-1.5 text-sm"
+              >
+                <span className="font-semibold text-neutral-700">
+                  {formatOrderNumber(order.orderNumber)}
+                </span>
+                <span className="text-neutral-500">{order.customer.name}</span>
+                <span className="font-semibold text-neutral-700">
+                  {formatCentsToBRL(order.totalCents)}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => handleConfirmPixPayment(order.id, order.orderNumber)}
+                  loading={confirmingPixId === order.id}
+                >
+                  Confirmar pagamento
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-2 border-b border-neutral-100 bg-white px-6 py-3">
         <div className="relative w-full max-w-xs">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-neutral-400" />
@@ -207,7 +275,7 @@ export function KanbanBoard({ initialOrders, storeName }: KanbanBoardProps) {
 
       <div className="flex-1 overflow-x-auto p-6">
         <div className="flex h-full gap-4">
-          {ORDER_STATUSES.map((status) => {
+          {BOARD_STATUSES.map((status) => {
             const columnOrders = orders.filter((o) => o.status === status);
             const colors = ORDER_STATUS_COLORS[status];
             return (

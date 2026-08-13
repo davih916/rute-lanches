@@ -34,6 +34,8 @@ export const updateSettingsSchema = z.object({
   acceptedPaymentMethods: z
     .array(z.enum(PAYMENT_METHODS))
     .min(1, "Selecione ao menos uma forma de pagamento"),
+  pixKey: z.string().trim().max(140).optional().or(z.literal("")),
+  pixCity: z.string().trim().max(15).optional().or(z.literal("")),
   minOrderCents: z.number().int().min(0),
   receiptWidth: z.enum(RECEIPT_WIDTHS),
 });

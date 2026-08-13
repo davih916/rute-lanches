@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { createOrderSchema } from "@/lib/validations/order";
-import { createOrder, listOrders, OrderServiceError } from "@/lib/services/order-service";
+import { createOrder, listOrders, listPendingPixPayments, OrderServiceError } from "@/lib/services/order-service";
 import { checkRequestRateLimit, getClientIp } from "@/lib/rate-limit";
 
 /** Público: o cliente do site cria um pedido. */
@@ -44,6 +44,6 @@ export async function GET() {
     return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
   }
 
-  const orders = await listOrders();
-  return NextResponse.json({ orders });
+  const [orders, pendingPixPayments] = await Promise.all([listOrders(), listPendingPixPayments()]);
+  return NextResponse.json({ orders, pendingPixPayments });
 }

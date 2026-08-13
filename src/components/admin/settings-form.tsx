@@ -36,6 +36,8 @@ export function SettingsForm({ settings }: SettingsFormProps) {
   const [secondaryColor, setSecondaryColor] = useState(settings.secondaryColor);
   const [whatsapp, setWhatsapp] = useState(settings.whatsapp ?? "");
   const [address, setAddress] = useState(settings.address ?? "");
+  const [pixKey, setPixKey] = useState(settings.pixKey ?? "");
+  const [pixCity, setPixCity] = useState(settings.pixCity ?? "SOROCABA");
   const [storeOpen, setStoreOpen] = useState(settings.storeOpen);
   const [schedule, setSchedule] = useState<WeeklySchedule>(
     () => parseWeeklySchedule(settings.openingHours) ?? defaultWeeklySchedule()
@@ -81,6 +83,8 @@ export function SettingsForm({ settings }: SettingsFormProps) {
           secondaryColor,
           whatsapp,
           address,
+          pixKey,
+          pixCity,
           storeOpen,
           openingHours: schedule,
           acceptedPaymentMethods,
@@ -220,6 +224,36 @@ export function SettingsForm({ settings }: SettingsFormProps) {
             );
           })}
         </div>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-5">
+        <div>
+          <p className="font-semibold text-neutral-900">Chave Pix</p>
+          <p className="text-sm text-neutral-500">
+            Cadastre aqui a chave Pix da loja (CPF, CNPJ, e-mail, telefone ou chave aleatória).
+            O sistema gera automaticamente o QR Code com o valor certo de cada pedido — o
+            pagamento cai direto na sua conta, sem taxas ou conta em outro banco. Você confirma
+            manualmente no Kanban quando o dinheiro cair.
+          </p>
+        </div>
+        <Input
+          name="pixKey"
+          label="Chave Pix"
+          placeholder="CPF, e-mail, telefone ou chave aleatória"
+          value={pixKey}
+          onChange={(e) => setPixKey(e.target.value)}
+        />
+        <Input
+          name="pixCity"
+          label="Cidade (para o QR Code)"
+          value={pixCity}
+          onChange={(e) => setPixCity(e.target.value.toUpperCase())}
+        />
+        {!pixKey && (
+          <p className="text-xs text-amber-600">
+            Sem chave Pix cadastrada, os clientes não conseguem pagar por Pix pelo site.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-col gap-3 rounded-xl border border-neutral-200 bg-white p-5">

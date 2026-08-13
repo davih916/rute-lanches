@@ -1,0 +1,4 @@
+-- AlterTable
+ALTER TABLE "settings"
+  ADD COLUMN "pixKey" TEXT,
+  ADD COLUMN "pixCity" TEXT NOT NULL DEFAULT 'SOROCABA';

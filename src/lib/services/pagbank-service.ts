@@ -1,8 +1,11 @@
 import "server-only";
+import QRCode from "qrcode";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { getOrderById } from "@/lib/services/order-service";
+import { getSettings } from "@/lib/services/settings-service";
 import { getPagBankConfig, getPagBankBaseUrl, getPagBankToken } from "@/lib/services/pagbank-config-service";
+import { generatePixBRCode } from "@/lib/pix-brcode";
 import type { PixCharge } from "@prisma/client";
 
 export class PagBankServiceError extends Error {
@@ -63,16 +66,40 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
     throw err;
   }
 
+  // Caminho principal: chave Pix simples cadastrada em Configurações — gera o
+  // BR Code na hora, sem depender de nenhuma API externa. Confirmação de
+  // pagamento é manual (o admin confere no app do banco e clica "Confirmar
+  // pagamento" no Kanban — ver confirmPixPayment em order-service.ts).
+  const settings = await getSettings();
+  if (settings.pixKey?.trim()) {
+    const qrCodeText = generatePixBRCode({
+      pixKey: settings.pixKey.trim(),
+      merchantName: settings.storeName,
+      merchantCity: settings.pixCity,
+      amountCents: order.totalCents,
+      txid: order.id,
+    });
+    const qrCodeImageUrl = await QRCode.toDataURL(qrCodeText, { margin: 1, width: 320 }).catch(() => null);
+
+    return prisma.pixCharge.update({
+      where: { orderId },
+      data: { qrCodeText, qrCodeImageUrl },
+    });
+  }
+
+  // Sem chave Pix cadastrada: tenta o PagBank (integração legada, mantida
+  // pra quem já tinha configurado antes) — se também não estiver configurado,
+  // devolve erro claro pro cliente.
   const config = await getPagBankConfig();
   let token: string;
   try {
     token = getPagBankToken(config);
-  } catch (err) {
+  } catch {
     return prisma.pixCharge.update({
       where: { orderId },
       data: {
         status: "erro",
-        errorMessage: err instanceof Error ? err.message : "PagBank não configurado.",
+        errorMessage: "Pix não configurado. Fale com a loja para combinar o pagamento.",
       },
     });
   }

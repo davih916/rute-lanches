@@ -1,4 +1,5 @@
 export const ORDER_STATUSES = [
+  "aguardando_pagamento",
   "recebido",
   "preparando",
   "saiu_entrega",
@@ -10,6 +11,7 @@ export const ORDER_STATUSES = [
 export type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  aguardando_pagamento: "Aguardando pagamento",
   recebido: "Novo pedido",
   preparando: "Preparando",
   saiu_entrega: "Saiu para entrega",
@@ -19,6 +21,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
 };
 
 export const ORDER_STATUS_EMOJI: Record<OrderStatus, string> = {
+  aguardando_pagamento: "\u{1F7E0}",
   recebido: "\u{1F534}",
   preparando: "\u{1F7E1}",
   saiu_entrega: "\u{1F535}",
@@ -28,6 +31,7 @@ export const ORDER_STATUS_EMOJI: Record<OrderStatus, string> = {
 };
 
 export const ORDER_STATUS_COLORS: Record<OrderStatus, { bg: string; text: string; dot: string }> = {
+  aguardando_pagamento: { bg: "bg-orange-50", text: "text-orange-700", dot: "bg-orange-500" },
   recebido: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
   preparando: { bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-500" },
   saiu_entrega: { bg: "bg-blue-50", text: "text-blue-700", dot: "bg-blue-500" },

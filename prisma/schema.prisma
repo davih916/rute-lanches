@@ -184,11 +184,13 @@ model Order {
   customerId       String
   customer         Customer  @relation(fields: [customerId], references: [id])
   status           String    @default("recebido")
-  // "recebido" (novo pedido — para entrega, também significa "aguardando
-  // confirmação da entrega" enquanto não for aprovado/recusado, ver §
-  // approveDelivery/rejectDelivery em order-service.ts) | "preparando" |
-  // "saiu_entrega" (só entrega) | "pronto_retirada" (só retirada/balcão) |
-  // "entregue" | "cancelado"
+  // "aguardando_pagamento" (só pedidos Pix — criado nesse status e fica FORA
+  // do Kanban até o admin confirmar manualmente que o Pix caiu, ver
+  // confirmPixPayment em order-service.ts) | "recebido" (novo pedido — para
+  // entrega, também significa "aguardando confirmação da entrega" enquanto
+  // não for aprovado/recusado, ver § approveDelivery/rejectDelivery em
+  // order-service.ts) | "preparando" | "saiu_entrega" (só entrega) |
+  // "pronto_retirada" (só retirada/balcão) | "entregue" | "cancelado"
   deliveryType     String    @default("entrega")
   // "entrega" | "retirada" | "balcao" (venda no balcão, criada pelo admin)
   paymentMethod    String
@@ -302,6 +304,11 @@ model Settings {
   storeOpen        Boolean  @default(true)
   openingHours     String   @default("{}") // JSON serializado por dia da semana
   acceptedPaymentMethods String @default("[\"pix\",\"dinheiro\",\"cartao_credito\",\"cartao_debito\"]") // JSON array de PaymentMethod
+  // Chave Pix simples da loja (CPF/CNPJ/e-mail/telefone/aleatória) usada para
+  // gerar o QR Code estático "copia e cola" (ver src/lib/pix-brcode.ts) — não
+  // depende de conta/API do PagBank. Se vazia, o Pix fica indisponível.
+  pixKey           String?
+  pixCity          String   @default("SOROCABA") // cidade do recebedor exigida no payload do BR Code Pix (sem acentos, maiúsculas)
   deliveryFeeCents Int      @default(0)
   minOrderCents    Int      @default(0)
   receiptWidth     String   @default("80mm") // "58mm" | "80mm"
