@@ -41,6 +41,7 @@ export async function getSettingsSafe(): Promise<Settings> {
       openingHours: "{}",
       acceptedPaymentMethods: "[]",
       pixKey: null,
+      pixKeyType: "telefone",
       pixCity: "SOROCABA",
       mensalidadePagaEm: null,
       deliveryFeeCents: 0,
@@ -62,6 +63,7 @@ export interface UpdateSettingsData {
   openingHours: string; // JSON serializado (ver src/lib/opening-hours.ts)
   acceptedPaymentMethods: string; // JSON array serializado (ver src/lib/constants.ts)
   pixKey?: string;
+  pixKeyType?: string;
   pixCity?: string;
   minOrderCents: number;
   receiptWidth: string;

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { RECEIPT_WIDTHS, PAYMENT_METHODS } from "@/lib/constants";
 import { WEEKDAYS } from "@/lib/opening-hours";
+import { PIX_KEY_TYPES } from "@/lib/pix-brcode";
 
 const timeSchema = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Horário inválido (use HH:mm)");
 
@@ -35,6 +36,7 @@ export const updateSettingsSchema = z.object({
     .array(z.enum(PAYMENT_METHODS))
     .min(1, "Selecione ao menos uma forma de pagamento"),
   pixKey: z.string().trim().max(140).optional().or(z.literal("")),
+  pixKeyType: z.enum(PIX_KEY_TYPES).optional(),
   pixCity: z.string().trim().max(15).optional().or(z.literal("")),
   minOrderCents: z.number().int().min(0),
   receiptWidth: z.enum(RECEIPT_WIDTHS),

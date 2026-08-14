@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getOrderById } from "@/lib/services/order-service";
 import { getSettings } from "@/lib/services/settings-service";
 import { getPagBankConfig, getPagBankBaseUrl, getPagBankToken } from "@/lib/services/pagbank-config-service";
-import { generatePixBRCode } from "@/lib/pix-brcode";
+import { generatePixBRCode, type PixKeyType } from "@/lib/pix-brcode";
 import type { PixCharge } from "@prisma/client";
 
 export class PagBankServiceError extends Error {
@@ -74,6 +74,7 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
   if (settings.pixKey?.trim()) {
     const qrCodeText = generatePixBRCode({
       pixKey: settings.pixKey.trim(),
+      pixKeyType: settings.pixKeyType as PixKeyType,
       merchantName: settings.storeName,
       merchantCity: settings.pixCity,
       amountCents: order.totalCents,

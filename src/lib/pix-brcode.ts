@@ -31,8 +31,45 @@ function crc16(payload: string): string {
   return crc.toString(16).toUpperCase().padStart(4, "0");
 }
 
+export const PIX_KEY_TYPES = ["cpf_cnpj", "email", "telefone", "aleatoria"] as const;
+export type PixKeyType = (typeof PIX_KEY_TYPES)[number];
+
+export const PIX_KEY_TYPE_LABELS: Record<PixKeyType, string> = {
+  cpf_cnpj: "CPF ou CNPJ",
+  email: "E-mail",
+  telefone: "Telefone",
+  aleatoria: "Chave aleatória",
+};
+
+/**
+ * Normaliza a chave pro formato exato que o Pix exige — digitar com
+ * espaço/traço/parênteses (como alguém digitaria um telefone normalmente,
+ * ex: "15 99610-9624") gera uma chave inválida que o banco do cliente
+ * rejeita na hora de pagar ("chave Pix inválida"). Cada tipo tem um formato
+ * fixo definido pelo Banco Central, sem ambiguidade — por isso pede o tipo
+ * explicitamente em vez de tentar adivinhar.
+ */
+export function normalizePixKey(rawKey: string, keyType: PixKeyType): string {
+  const trimmed = rawKey.trim();
+  switch (keyType) {
+    case "email":
+    case "aleatoria":
+      // Chave aleatória já vem no formato certo (UUID com hífens) — não mexe.
+      return trimmed;
+    case "cpf_cnpj":
+      return trimmed.replace(/\D/g, "");
+    case "telefone": {
+      const digits = trimmed.replace(/\D/g, "");
+      // Já digitado com código do país (13 dígitos: 55 + DDD + 9 dígitos)?
+      const local = digits.length > 11 ? digits.slice(-11) : digits;
+      return `+55${local}`;
+    }
+  }
+}
+
 export interface PixBRCodeInput {
   pixKey: string;
+  pixKeyType: PixKeyType;
   merchantName: string;
   merchantCity: string;
   amountCents: number;
@@ -41,11 +78,21 @@ export interface PixBRCodeInput {
 }
 
 /** Monta o payload EMV completo (com CRC16 no final) pronto para virar QR Code. */
-export function generatePixBRCode({ pixKey, merchantName, merchantCity, amountCents, txid }: PixBRCodeInput): string {
+export function generatePixBRCode({
+  pixKey,
+  pixKeyType,
+  merchantName,
+  merchantCity,
+  amountCents,
+  txid,
+}: PixBRCodeInput): string {
   const amount = (amountCents / 100).toFixed(2);
   const sanitizedTxid = txid.replace(/[^a-zA-Z0-9]/g, "").slice(0, 25) || "***";
 
-  const merchantAccountInfo = [tlv("00", "br.gov.bcb.pix"), tlv("01", pixKey.trim())].join("");
+  const merchantAccountInfo = [
+    tlv("00", "br.gov.bcb.pix"),
+    tlv("01", normalizePixKey(pixKey, pixKeyType)),
+  ].join("");
 
   const additionalData = tlv("05", sanitizedTxid);
 

@@ -308,6 +308,11 @@ model Settings {
   // gerar o QR Code estático "copia e cola" (ver src/lib/pix-brcode.ts) — não
   // depende de conta/API do PagBank. Se vazia, o Pix fica indisponível.
   pixKey           String?
+  // "cpf_cnpj" | "email" | "telefone" | "aleatoria" — define como pixKey é
+  // formatada dentro do BR Code (ver normalizePixKey em src/lib/pix-brcode.ts).
+  // Sem isso, uma chave digitada com espaço/traço (ex: telefone) vira uma
+  // chave Pix inválida que o banco do cliente rejeita.
+  pixKeyType       String   @default("telefone")
   pixCity          String   @default("SOROCABA") // cidade do recebedor exigida no payload do BR Code Pix (sem acentos, maiúsculas)
   // Mês (formato "YYYY-MM") em que a mensalidade de manutenção do sistema foi
   // confirmada como paga — controla o banner de cobrança no fim do mês (ver

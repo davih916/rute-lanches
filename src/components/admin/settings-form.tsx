@@ -23,7 +23,15 @@ import {
   type WeeklySchedule,
   type DaySchedule,
 } from "@/lib/opening-hours";
+import { PIX_KEY_TYPES, PIX_KEY_TYPE_LABELS, type PixKeyType } from "@/lib/pix-brcode";
 import type { Settings } from "@prisma/client";
+
+const PIX_KEY_PLACEHOLDERS: Record<PixKeyType, string> = {
+  cpf_cnpj: "Só números — ex: 12345678900",
+  email: "ex: rute@email.com",
+  telefone: "Com DDD — ex: 15 99610-9624 (o sistema formata sozinho)",
+  aleatoria: "ex: 123e4567-e89b-12d3-a456-426614174000",
+};
 
 interface SettingsFormProps {
   settings: Settings;
@@ -37,6 +45,9 @@ export function SettingsForm({ settings }: SettingsFormProps) {
   const [whatsapp, setWhatsapp] = useState(settings.whatsapp ?? "");
   const [address, setAddress] = useState(settings.address ?? "");
   const [pixKey, setPixKey] = useState(settings.pixKey ?? "");
+  const [pixKeyType, setPixKeyType] = useState<PixKeyType>(
+    (settings.pixKeyType as PixKeyType) ?? "telefone"
+  );
   const [pixCity, setPixCity] = useState(settings.pixCity ?? "SOROCABA");
   const [storeOpen, setStoreOpen] = useState(settings.storeOpen);
   const [schedule, setSchedule] = useState<WeeklySchedule>(
@@ -84,6 +95,7 @@ export function SettingsForm({ settings }: SettingsFormProps) {
           whatsapp,
           address,
           pixKey,
+          pixKeyType,
           pixCity,
           storeOpen,
           openingHours: schedule,
@@ -236,13 +248,30 @@ export function SettingsForm({ settings }: SettingsFormProps) {
             manualmente no Kanban quando o dinheiro cair.
           </p>
         </div>
+        <Select
+          name="pixKeyType"
+          label="Tipo da chave"
+          value={pixKeyType}
+          onChange={(e) => setPixKeyType(e.target.value as PixKeyType)}
+        >
+          {PIX_KEY_TYPES.map((type) => (
+            <option key={type} value={type}>
+              {PIX_KEY_TYPE_LABELS[type]}
+            </option>
+          ))}
+        </Select>
         <Input
           name="pixKey"
           label="Chave Pix"
-          placeholder="CPF, e-mail, telefone ou chave aleatória"
+          placeholder={PIX_KEY_PLACEHOLDERS[pixKeyType]}
           value={pixKey}
           onChange={(e) => setPixKey(e.target.value)}
         />
+        <p className="text-xs text-neutral-400">
+          Digite igual está no seu banco — pode usar espaço/traço no telefone, o sistema
+          formata sozinho. O importante é escolher o tipo certo acima (é isso que estava
+          errado antes e causava o erro ao pagar).
+        </p>
         <Input
           name="pixCity"
           label="Cidade (para o QR Code)"
