@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Copy, Loader2 } from "lucide-react";
+import { Check, Copy, Loader2, MessageCircle, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { buildPixPaidNotificationLink } from "@/lib/whatsapp";
 
 interface PixChargeData {
   status: "aguardando_pagamento" | "pago" | "expirado" | "erro";
@@ -11,20 +13,28 @@ interface PixChargeData {
   errorMessage: string | null;
 }
 
-export function PixPaymentPanel({ orderId }: { orderId: string }) {
+interface PixPaymentPanelProps {
+  orderId: string;
+  orderNumber: number;
+  storeWhatsapp?: string | null;
+}
+
+export function PixPaymentPanel({ orderId, orderNumber, storeWhatsapp }: PixPaymentPanelProps) {
   const [charge, setCharge] = useState<PixChargeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelledEffect = false;
 
     async function fetchCharge() {
       try {
         const res = await fetch(`/api/orders/${orderId}/pix`);
         const data = await res.json();
-        if (cancelled) return;
+        if (cancelledEffect) return;
         if (res.ok) {
           setCharge(data.charge);
           if (data.charge.status === "pago" && pollRef.current) {
@@ -34,7 +44,7 @@ export function PixPaymentPanel({ orderId }: { orderId: string }) {
       } catch {
         // Falha de rede num poll: ignora e tenta de novo no próximo ciclo de 5s.
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelledEffect) setLoading(false);
       }
     }
 
@@ -42,7 +52,7 @@ export function PixPaymentPanel({ orderId }: { orderId: string }) {
     pollRef.current = setInterval(fetchCharge, 5000);
 
     return () => {
-      cancelled = true;
+      cancelledEffect = true;
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [orderId]);
@@ -70,10 +80,42 @@ export function PixPaymentPanel({ orderId }: { orderId: string }) {
     setTimeout(() => setCopied(false), 2000);
   }
 
+  function handlePixFeito() {
+    if (!storeWhatsapp) return;
+    window.open(buildPixPaidNotificationLink(storeWhatsapp, orderNumber), "_blank", "noopener,noreferrer");
+  }
+
+  async function handleCancelOrder() {
+    if (!confirm("Cancelar este pedido? Essa ação não pode ser desfeita.")) return;
+    setCancelling(true);
+    try {
+      const res = await fetch(`/api/orders/${orderId}/cancel`, { method: "POST" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(data?.error ?? "Não foi possível cancelar o pedido.");
+        return;
+      }
+      if (pollRef.current) clearInterval(pollRef.current);
+      setCancelled(true);
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="mt-4 flex items-center justify-center gap-2 rounded-xl border border-neutral-200 bg-white p-5 text-sm text-neutral-500">
         <Loader2 className="size-4 animate-spin" /> Gerando cobrança Pix...
+      </div>
+    );
+  }
+
+  if (cancelled) {
+    return (
+      <div className="mt-4 flex items-center gap-2 rounded-xl border border-neutral-200 bg-neutral-50 p-5 text-sm font-medium text-neutral-600">
+        <X className="size-5" /> Pedido cancelado.
       </div>
     );
   }
@@ -120,6 +162,24 @@ export function PixPaymentPanel({ orderId }: { orderId: string }) {
       <p className="flex items-center gap-1.5 text-xs text-neutral-400">
         <Loader2 className="size-3 animate-spin" /> Aguardando confirmação do pagamento...
       </p>
+
+      <div className="mt-1 grid w-full grid-cols-2 gap-2">
+        {storeWhatsapp && (
+          <Button type="button" onClick={handlePixFeito} className="w-full !bg-emerald-600 hover:!bg-emerald-700">
+            <MessageCircle className="size-4" />
+            Pix feito
+          </Button>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          loading={cancelling}
+          onClick={handleCancelOrder}
+          className={`w-full border-red-300 text-red-600 hover:bg-red-50 ${!storeWhatsapp ? "col-span-2" : ""}`}
+        >
+          Cancelar pedido
+        </Button>
+      </div>
     </div>
   );
 }

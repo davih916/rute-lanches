@@ -390,7 +390,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
         </button>
       )}
 
-      {!awaitingDeliveryApproval && status !== "cancelado" && status !== "entregue" && (
+      {!awaitingDeliveryApproval && status !== "cancelado" && status !== "entregue" && status !== "saiu_entrega" && (
         <button
           onClick={(e) => {
             e.stopPropagation();

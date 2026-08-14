@@ -133,7 +133,7 @@ export default async function OrderConfirmationPage({
       </div>
 
       {order.paymentMethod === "pix" && order.paymentStatus === "pendente" && (
-        <PixPaymentPanel orderId={order.id} />
+        <PixPaymentPanel orderId={order.id} orderNumber={order.orderNumber} storeWhatsapp={settings.whatsapp} />
       )}
 
       {order.paymentMethod === "whatsapp" && (

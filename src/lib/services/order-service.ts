@@ -223,9 +223,10 @@ export async function getOrderById(id: string): Promise<OrderWithRelations | nul
 /**
  * Confere se a transição faz sentido pro tipo de pedido — nunca confia só no
  * que o cliente (frontend) mandou. "cancelado" é sempre permitido (menos de
- * um pedido já finalizado) por ser uma saída de emergência fora do fluxo
- * normal; pedidos de entrega em "recebido" só saem daí via
- * approveDelivery/rejectDelivery (não pelo endpoint genérico de status).
+ * um pedido já finalizado ou já a caminho — ver abaixo) por ser uma saída de
+ * emergência fora do fluxo normal; pedidos de entrega em "recebido" só saem
+ * daí via approveDelivery/rejectDelivery (não pelo endpoint genérico de
+ * status).
  */
 function isValidStatusTransition(
   current: OrderStatus,
@@ -236,6 +237,10 @@ function isValidStatusTransition(
   // "aguardando_pagamento" só sai via confirmPixPayment (pagamento confirmado)
   // ou cancelamento — nunca pelo fluxo genérico de "próximo status".
   if (current === "aguardando_pagamento") return next === "cancelado";
+  // Pedido já saiu com o entregador — cancelar nesse ponto não impede a
+  // entrega de acontecer, só some com o registro. Depois disso só dá pra
+  // resolver por fora (ligando pro entregador), não pelo painel.
+  if (current === "saiu_entrega") return next === "entregue";
   if (next === "cancelado") return true;
   if (current === "recebido" && deliveryType === "entrega") return false;
   return getNextStatus(current, deliveryType) === next;
@@ -357,6 +362,38 @@ export async function confirmPixPayment(orderId: string): Promise<OrderWithRelat
     data: { paymentStatus: "pago" },
   });
   await prisma.pixCharge.updateMany({ where: { orderId }, data: { status: "pago", paidAt: new Date() } });
+  return (await getOrderById(orderId))!;
+}
+
+// Pedido só pode ser cancelado pelo próprio cliente (sem admin envolvido)
+// enquanto ainda não saiu pra entrega/ficou pronto pra retirada — depois
+// disso a loja já pode ter preparado/despachado, então só o admin decide.
+const CUSTOMER_CANCELLABLE_STATUSES: OrderStatus[] = ["recebido", "preparando"];
+
+/** Cancelamento feito pelo próprio cliente (tela /pedido/[id], sem login) — ex: pediu por engano, desistiu do Pix. */
+export async function cancelOrderByCustomer(orderId: string): Promise<OrderWithRelations> {
+  const existing = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existing) {
+    throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+  if (!CUSTOMER_CANCELLABLE_STATUSES.includes(existing.status as OrderStatus)) {
+    throw new OrderServiceError(
+      "Este pedido já está a caminho ou foi finalizado — não é mais possível cancelar por aqui. Fale com a loja.",
+      "INVALID_STATUS_TRANSITION"
+    );
+  }
+
+  const updated = await prisma.order.updateMany({
+    where: { id: orderId, status: { in: CUSTOMER_CANCELLABLE_STATUSES } },
+    data: { status: "cancelado" },
+  });
+  if (updated.count === 0) {
+    throw new OrderServiceError(
+      "Este pedido já foi atualizado — atualize a página e confira o status.",
+      "STATUS_CONFLICT"
+    );
+  }
+  await prisma.orderStatusHistory.create({ data: { orderId, status: "cancelado" } });
   return (await getOrderById(orderId))!;
 }
 

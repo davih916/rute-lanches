@@ -26,6 +26,7 @@ interface NovaVendaScreenProps {
 
 interface CreatedOrder {
   id: string;
+  orderNumber: number;
   paymentMethod: string;
 }
 
@@ -61,7 +62,7 @@ export function NovaVendaScreen({
         </div>
 
         {createdOrder.paymentMethod === "pix" ? (
-          <PixPaymentPanel orderId={createdOrder.id} />
+          <PixPaymentPanel orderId={createdOrder.id} orderNumber={createdOrder.orderNumber} />
         ) : (
           <p className="rounded-xl border border-neutral-200 bg-white p-5 text-sm text-neutral-500">
             Pedido criado e já aparece no painel de pedidos.

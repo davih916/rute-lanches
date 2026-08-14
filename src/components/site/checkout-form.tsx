@@ -43,7 +43,7 @@ interface CheckoutFormProps {
   requireCustomerContact?: boolean;
   submitLabel?: string;
   /** Se informado, é chamado no lugar do redirecionamento padrão para /pedido/[id]. */
-  onOrderCreated?: (order: { id: string; paymentMethod: string }) => void;
+  onOrderCreated?: (order: { id: string; orderNumber: number; paymentMethod: string }) => void;
   /** O site redireciona pra home se o carrinho estiver vazio; a Venda no Balcão começa vazia de propósito. */
   redirectIfEmpty?: boolean;
 }

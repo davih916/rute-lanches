@@ -59,6 +59,13 @@ export function buildWhatsAppOrderLink(storeWhatsapp: string, order: WhatsAppOrd
   return `https://wa.me/${toWhatsAppDigits(storeWhatsapp)}?text=${encodeURIComponent(message)}`;
 }
 
+/** Link "wa.me" pra LOJA quando o cliente avisa que já pagou o Pix (tela /pedido/[id]). */
+export function buildPixPaidNotificationLink(storeWhatsapp: string, orderNumber: number): string {
+  const num = String(orderNumber).padStart(3, "0");
+  const message = `Olá! Acabei de pagar o Pix do pedido #${num}. Pode confirmar quando verificar? Obrigado!`;
+  return `https://wa.me/${toWhatsAppDigits(storeWhatsapp)}?text=${encodeURIComponent(message)}`;
+}
+
 /** Formato compartilhado entre o pedido recém-criado (resposta da API) e o `OrderWithRelations` do banco. */
 interface OrderLike {
   orderNumber: number;
