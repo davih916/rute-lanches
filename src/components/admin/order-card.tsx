@@ -312,6 +312,24 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
             loading={isUpdating}
             onClick={(e) => {
               e.stopPropagation();
+              // "Saiu para entrega" abre o WhatsApp pro cliente automático,
+              // igual já acontece ao aceitar/recusar a entrega — não depende
+              // de alguém lembrar de clicar em "Avisar cliente" depois.
+              if (next === "saiu_entrega" && order.customer.phone) {
+                const message = getStatusNotificationMessage(notifiableOrder, "saiu_entrega");
+                if (message) {
+                  window.open(
+                    buildCustomerNotificationLink(order.customer.phone, message),
+                    "_blank",
+                    "noopener,noreferrer"
+                  );
+                  fetch(`/api/orders/${order.id}/notify`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ status: "saiu_entrega" }),
+                  }).catch(() => {});
+                }
+              }
               onChangeStatus(order.id, next, status);
             }}
             className="w-full text-base"
