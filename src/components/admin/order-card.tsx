@@ -21,6 +21,7 @@ import {
   getStatusNotificationMessage,
   getDeliveryApprovedMessage,
   getDeliveryRejectionMessage,
+  getOrderCancelledMessage,
   buildCustomerNotificationLink,
   parseNotifiedStatuses,
 } from "@/lib/order-notifications";
@@ -46,6 +47,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
   const queryClient = useQueryClient();
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const [confirmingPix, setConfirmingPix] = useState(false);
 
   const status = order.status as OrderStatus;
   const deliveryType = order.deliveryType as DeliveryType;
@@ -106,6 +108,25 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
       toast.error("Falha de conexão.");
     } finally {
       setApproving(false);
+    }
+  }
+
+  async function handleConfirmPix(e: React.MouseEvent) {
+    e.stopPropagation();
+    setConfirmingPix(true);
+    try {
+      const res = await fetch(`/api/orders/${order.id}/confirm-payment`, { method: "POST" });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(data?.error ?? "Não foi possível confirmar o pagamento.");
+        return;
+      }
+      toast.success("Pix confirmado.");
+      await refreshOrders();
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setConfirmingPix(false);
     }
   }
 
@@ -276,6 +297,19 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
         </span>
       </div>
 
+      {isPix && order.paymentStatus !== "pago" && (
+        <Button
+          size="sm"
+          variant="outline"
+          loading={confirmingPix}
+          onClick={handleConfirmPix}
+          className="w-full !border-emerald-300 text-emerald-700 hover:!bg-emerald-50"
+        >
+          <Check className="size-4" />
+          Confirmar Pix recebido
+        </Button>
+      )}
+
       {awaitingDeliveryApproval ? (
         <div className="flex flex-col gap-2 rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
           <p className="flex items-center gap-1.5 text-sm font-extrabold uppercase text-amber-800">
@@ -360,8 +394,33 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
         <button
           onClick={(e) => {
             e.stopPropagation();
+            const reason = window.prompt(
+              "Por que o pedido está sendo cancelado? (opcional, aparece na mensagem pro cliente)",
+              ""
+            );
+            if (reason === null) return;
             if (!confirm(`Cancelar o pedido ${formatOrderNumber(order.orderNumber)}? Essa ação não pode ser desfeita.`)) {
               return;
+            }
+            if (order.customer.phone) {
+              const message = getOrderCancelledMessage(
+                {
+                  orderNumber: order.orderNumber,
+                  customerName: order.customer.name,
+                  customerPhone: order.customer.phone,
+                  storeName,
+                  items: order.items.map((item) => ({ productName: item.productName, quantity: item.quantity })),
+                  totalCents: order.totalCents,
+                  paymentMethod: order.paymentMethod,
+                },
+                reason
+              );
+              window.open(buildCustomerNotificationLink(order.customer.phone, message), "_blank", "noopener,noreferrer");
+              fetch(`/api/orders/${order.id}/notify`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "cancelado" }),
+              }).catch(() => {});
             }
             onChangeStatus(order.id, "cancelado", status);
           }}

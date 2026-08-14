@@ -1,7 +1,7 @@
 import { toWhatsAppDigits } from "@/lib/whatsapp";
 import { formatOrderNumber } from "@/lib/format";
 import { formatCentsToBRL } from "@/lib/money";
-import type { OrderStatus } from "@/lib/constants";
+import { getPaymentMethodLabel, type OrderStatus } from "@/lib/constants";
 
 interface NotifiableOrder {
   orderNumber: number;
@@ -13,6 +13,10 @@ interface NotifiableOrder {
 interface ApprovedOrderInfo extends NotifiableOrder {
   items: { productName: string; quantity: number }[];
   totalCents: number;
+}
+
+interface CancelledOrderInfo extends ApprovedOrderInfo {
+  paymentMethod: string;
 }
 
 /**
@@ -49,6 +53,20 @@ export function getDeliveryRejectionMessage(order: NotifiableOrder, reason?: str
   const num = formatOrderNumber(order.orderNumber);
   const reasonText = reason?.trim() ? ` Motivo: ${reason.trim()}.` : "";
   return `Olá, ${order.customerName}. Infelizmente a ${order.storeName} não conseguiu aceitar a entrega do pedido ${num} para o endereço informado.${reasonText} Entre em contato conosco caso queira verificar outra possibilidade. Agradecemos a sua preferência e esperamos atendê-lo em breve.`;
+}
+
+/**
+ * Mensagem quando um pedido JÁ aceito é cancelado depois (falta de produto,
+ * pedido em duplicidade, a pedido do cliente, etc — diferente da recusa de
+ * entrega, que é ANTES de aceitar, ver `getDeliveryRejectionMessage`). Traz
+ * todos os dados do pedido pra servir de confirmação por escrito do
+ * cancelamento, não só um aviso genérico.
+ */
+export function getOrderCancelledMessage(order: CancelledOrderInfo, reason?: string | null): string {
+  const num = formatOrderNumber(order.orderNumber);
+  const itemsList = order.items.map((i) => `${i.quantity}x ${i.productName}`).join(", ");
+  const reasonText = reason?.trim() ? ` Motivo: ${reason.trim()}.` : "";
+  return `Olá, ${order.customerName}. Seu pedido ${num} (${itemsList}) na ${order.storeName} foi CANCELADO.${reasonText} Forma de pagamento: ${getPaymentMethodLabel(order.paymentMethod)}. Total: ${formatCentsToBRL(order.totalCents)}. Se você já pagou e tiver qualquer dúvida sobre o cancelamento, fale com a gente. Pedimos desculpas pelo transtorno.`;
 }
 
 /** Link "wa.me" pro número do CLIENTE (diferente de whatsapp.ts, que manda pro número da loja). */

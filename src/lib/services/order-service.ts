@@ -340,29 +340,23 @@ export async function approveDelivery(
  * Move o pedido pra "recebido", de onde segue o fluxo normal (ou aprovação de
  * entrega, se for o caso).
  */
-export async function confirmPixPayment(orderId: string, adminId: string): Promise<OrderWithRelations> {
+export async function confirmPixPayment(orderId: string): Promise<OrderWithRelations> {
   const existing = await prisma.order.findUnique({ where: { id: orderId } });
   if (!existing) {
     throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
   }
-  if (existing.status !== "aguardando_pagamento") {
-    throw new OrderServiceError("Este pedido não está aguardando pagamento.", "NOT_PENDING_PAYMENT");
+  if (existing.paymentMethod !== "pix") {
+    throw new OrderServiceError("Este pedido não é pago por Pix.", "NOT_PENDING_PAYMENT");
   }
 
-  const updated = await prisma.order.updateMany({
-    where: { id: orderId, status: "aguardando_pagamento" },
-    data: { status: "recebido", paymentStatus: "pago" },
+  // Não mexe no `status` do pedido (Kanban) — só marca que o dinheiro caiu.
+  // O pedido pode já estar em qualquer etapa do preparo nesse momento (a
+  // cozinha não fica esperando a confirmação do Pix pra começar).
+  await prisma.order.updateMany({
+    where: { id: orderId, paymentStatus: { not: "pago" } },
+    data: { paymentStatus: "pago" },
   });
-  if (updated.count === 0) {
-    throw new OrderServiceError(
-      "Este pedido já foi atualizado por outra pessoa. Atualize a tela e tente de novo.",
-      "STATUS_CONFLICT"
-    );
-  }
   await prisma.pixCharge.updateMany({ where: { orderId }, data: { status: "pago", paidAt: new Date() } });
-  await prisma.orderStatusHistory.create({
-    data: { orderId, status: "recebido", changedById: adminId },
-  });
   return (await getOrderById(orderId))!;
 }
 

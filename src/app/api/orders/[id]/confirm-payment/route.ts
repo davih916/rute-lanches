@@ -11,7 +11,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   const { id } = await params;
 
   try {
-    const order = await confirmPixPayment(id, session.sub);
+    const order = await confirmPixPayment(id);
     return NextResponse.json({ order });
   } catch (err) {
     if (err instanceof OrderServiceError) {
