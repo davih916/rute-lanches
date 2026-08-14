@@ -134,13 +134,13 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
     },
   });
 
-  // Pedido por Pix com chave cadastrada: só "entra" de verdade (aparece no
-  // Kanban) depois que o admin confirmar manualmente que o pagamento caiu —
-  // ver confirmPixPayment. Sem chave Pix configurada, não tem como gatear
-  // (não existe confirmação automática nem manual possível), então segue
-  // igual às outras formas de pagamento.
-  const initialStatus: OrderStatus =
-    input.paymentMethod === "pix" && settings.pixKey?.trim() ? "aguardando_pagamento" : "recebido";
+  // Pedido de Pix entra no Kanban igual a qualquer outro, direto em
+  // "recebido" — não fica escondido esperando confirmação manual (testado e
+  // revertido: confundia a loja, que não sabia que precisava ir atrás dos
+  // pedidos Pix num lugar separado). "aguardando_pagamento" continua existindo
+  // como valor de status (histórico/isValidStatusTransition), só não é mais
+  // usado na criação de pedidos novos.
+  const initialStatus: OrderStatus = "recebido";
 
   const order = await prisma.$transaction(async (tx) => {
     // Seguro contra pedidos concorrentes gerarem o mesmo número: o UPDATE do
