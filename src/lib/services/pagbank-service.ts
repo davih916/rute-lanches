@@ -11,7 +11,7 @@ import type { PixCharge } from "@prisma/client";
 export class PagBankServiceError extends Error {
   constructor(
     message: string,
-    public readonly code: "ORDER_NOT_FOUND" | "NOT_PIX"
+    public readonly code: "ORDER_NOT_FOUND" | "NOT_PIX" | "DELIVERY_PENDING"
   ) {
     super(message);
     this.name = "PagBankServiceError";
@@ -49,6 +49,16 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
   }
   if (order.paymentMethod !== "pix") {
     throw new PagBankServiceError("Este pedido não usa pagamento Pix.", "NOT_PIX");
+  }
+  // Entrega ainda não aprovada: o total não inclui a taxa (só definida na
+  // aprovação — ver approveDelivery), então gerar o Pix agora cobraria um
+  // valor errado (a menos, sem a taxa). Só libera o pagamento depois que a
+  // loja confirmar o endereço e definir a taxa de entrega.
+  if (order.deliveryType === "entrega" && order.status === "recebido") {
+    throw new PagBankServiceError(
+      "A loja ainda está confirmando o endereço e a taxa de entrega.",
+      "DELIVERY_PENDING"
+    );
   }
 
   try {

@@ -93,14 +93,19 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
       toast.success("Entrega aprovada — pedido em preparo.");
       window.open(`/admin/comanda/${order.id}?autoprint=1`, "_blank", "width=380,height=640");
       if (order.customer.phone) {
-        const message = getDeliveryApprovedMessage({
-          orderNumber: order.orderNumber,
-          customerName: order.customer.name,
-          customerPhone: order.customer.phone,
-          storeName,
-          items: order.items.map((item) => ({ productName: item.productName, quantity: item.quantity })),
-          totalCents: order.itemsTotalCents + feeCents,
-        });
+        const message = getDeliveryApprovedMessage(
+          {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            customerName: order.customer.name,
+            customerPhone: order.customer.phone,
+            storeName,
+            paymentMethod: order.paymentMethod,
+            items: order.items.map((item) => ({ productName: item.productName, quantity: item.quantity })),
+            totalCents: order.itemsTotalCents + feeCents,
+          },
+          window.location.origin
+        );
         window.open(buildCustomerNotificationLink(order.customer.phone, message), "_blank", "noopener,noreferrer");
       }
       await refreshOrders();
@@ -405,6 +410,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
             if (order.customer.phone) {
               const message = getOrderCancelledMessage(
                 {
+                  orderId: order.id,
                   orderNumber: order.orderNumber,
                   customerName: order.customer.name,
                   customerPhone: order.customer.phone,

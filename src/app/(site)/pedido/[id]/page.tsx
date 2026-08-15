@@ -116,6 +116,7 @@ export default async function OrderConfirmationPage({
           <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
             A loja está confirmando sua entrega — o valor final (com a taxa) é definido nessa
             confirmação.
+            {order.paymentMethod === "pix" && " Assim que confirmar, você recebe o QR Code do Pix aqui."}
           </p>
         )}
 
@@ -132,7 +133,7 @@ export default async function OrderConfirmationPage({
         </div>
       </div>
 
-      {order.paymentMethod === "pix" && order.paymentStatus === "pendente" && (
+      {order.paymentMethod === "pix" && order.paymentStatus === "pendente" && !deliveryPending && (
         <PixPaymentPanel orderId={order.id} orderNumber={order.orderNumber} storeWhatsapp={settings.whatsapp} />
       )}
 
