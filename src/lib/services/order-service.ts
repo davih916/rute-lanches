@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
 import { getSettings } from "@/lib/services/settings-service";
+import { findZoneForCep } from "@/lib/services/delivery-zone-service";
 import { isStoreOpenNow } from "@/lib/opening-hours";
 import { parseAcceptedPaymentMethods, getNextStatus } from "@/lib/constants";
 import { parseNotifiedStatuses } from "@/lib/order-notifications";
@@ -22,6 +23,7 @@ export class OrderServiceError extends Error {
       | "INVALID_STATUS_TRANSITION"
       | "NOT_PENDING_APPROVAL"
       | "NOT_PENDING_PAYMENT"
+      | "CEP_NOT_COVERED"
   ) {
     super(message);
     this.name = "OrderServiceError";
@@ -100,10 +102,20 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
     });
   }
 
-  // Entrega não usa mais bairro pré-cadastrado com taxa fixa — o admin define
-  // a taxa real ao aprovar a entrega (ver approveDelivery), porque só ele sabe
-  // se aquele endereço digitado é viável e qual a distância de verdade.
-  const deliveryFeeCents = 0;
+  // Entrega usa a zona encontrada pelo CEP digitado — bloqueia o pedido se o
+  // CEP não estiver em nenhuma zona cadastrada (cliente fora da área
+  // atendida). A loja ainda confirma o endereço antes do Pix ser liberado
+  // (ver approveDelivery/getOrCreatePixCharge), podendo ajustar a taxa numa
+  // exceção pontual, mas o valor de partida já vem certo.
+  let deliveryZoneMatch: Awaited<ReturnType<typeof findZoneForCep>> = null;
+  if (input.deliveryType === "entrega") {
+    const cep = input.customer.cep ?? "";
+    deliveryZoneMatch = await findZoneForCep(cep);
+    if (!deliveryZoneMatch) {
+      throw new OrderServiceError("Não entregamos nesse CEP.", "CEP_NOT_COVERED");
+    }
+  }
+  const deliveryFeeCents = deliveryZoneMatch?.feeCents ?? 0;
   const totalCents = itemsTotalCents + deliveryFeeCents;
 
   if (input.cashChangeForCents !== undefined && input.cashChangeForCents < totalCents) {
@@ -119,18 +131,20 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
       name: input.customer.name,
       address: input.customer.address,
       addressNumber: input.customer.addressNumber,
-      neighborhood: input.customer.neighborhood,
+      neighborhood: deliveryZoneMatch?.neighborhood ?? input.customer.neighborhood,
       complement: input.customer.complement,
       reference: input.customer.reference,
+      cep: input.customer.cep,
     },
     create: {
       name: input.customer.name,
       phone: input.customer.phone,
       address: input.customer.address,
       addressNumber: input.customer.addressNumber,
-      neighborhood: input.customer.neighborhood,
+      neighborhood: deliveryZoneMatch?.neighborhood ?? input.customer.neighborhood,
       complement: input.customer.complement,
       reference: input.customer.reference,
+      cep: input.customer.cep,
     },
   });
 
@@ -167,9 +181,11 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
         // mostrarem o endereço de QUANDO o pedido foi feito.
         address: input.deliveryType === "entrega" ? input.customer.address || null : null,
         addressNumber: input.deliveryType === "entrega" ? input.customer.addressNumber || null : null,
-        neighborhood: input.deliveryType === "entrega" ? input.customer.neighborhood || null : null,
+        neighborhood: input.deliveryType === "entrega" ? deliveryZoneMatch?.neighborhood ?? null : null,
         complement: input.deliveryType === "entrega" ? input.customer.complement || null : null,
         reference: input.deliveryType === "entrega" ? input.customer.reference || null : null,
+        cep: input.deliveryType === "entrega" ? input.customer.cep || null : null,
+        deliveryZoneId: deliveryZoneMatch?.id ?? null,
         deliveryFeeCents,
         totalCents,
         notes: input.notes || null,

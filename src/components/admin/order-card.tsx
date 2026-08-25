@@ -73,8 +73,8 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
   async function handleApproveDelivery(e: React.MouseEvent) {
     e.stopPropagation();
     const input = window.prompt(
-      "Qual a taxa de entrega pra esse endereço? (em reais, ex: 8,00 — deixe 0 se for grátis)",
-      "0"
+      "Confirma a taxa de entrega? (já calculada pelo CEP — ajuste se for uma exceção pontual)",
+      (order.deliveryFeeCents / 100).toFixed(2).replace(".", ",")
     );
     if (input === null) return;
     const feeCents = reaisToCents(input);

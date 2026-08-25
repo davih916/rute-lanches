@@ -106,17 +106,11 @@ export function OrderDetailsCard({ initialOrder, storeWhatsapp, storeName }: Ord
           {isDelivery && (
             <div className="flex justify-between text-neutral-500">
               <span>Entrega</span>
-              <span>
-                {deliveryPending
-                  ? "A combinar"
-                  : order.deliveryFeeCents > 0
-                    ? formatCentsToBRL(order.deliveryFeeCents)
-                    : "Grátis"}
-              </span>
+              <span>{order.deliveryFeeCents > 0 ? formatCentsToBRL(order.deliveryFeeCents) : "Grátis"}</span>
             </div>
           )}
           <div className="flex justify-between text-base font-bold text-neutral-900">
-            <span>{deliveryPending ? "Total (sem a entrega)" : "Total"}</span>
+            <span>Total</span>
             <span>{formatCentsToBRL(order.totalCents)}</span>
           </div>
           <div className="flex justify-between text-neutral-500">
@@ -127,8 +121,8 @@ export function OrderDetailsCard({ initialOrder, storeWhatsapp, storeName }: Ord
 
         {deliveryPending && (
           <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
-            A loja está confirmando sua entrega — o valor final (com a taxa) é definido nessa
-            confirmação.
+            A loja ainda está confirmando seu endereço — o valor acima já é o esperado, mas pode
+            ser ajustado numa exceção pontual.
             {order.paymentMethod === "pix" && " Assim que confirmar, você recebe o QR Code do Pix aqui."}
           </p>
         )}

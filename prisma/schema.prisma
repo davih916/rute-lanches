@@ -147,6 +147,7 @@ model Customer {
   neighborhood  String?
   complement    String?
   reference     String?
+  cep           String? // dígitos, sem hífen — ver DeliveryZone.cepPrefix
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -155,19 +156,27 @@ model Customer {
   @@map("customers")
 }
 
-// Bairro atendido pela entrega, com taxa própria. `active=false` remove o bairro do
-// checkout sem apagar o histórico de pedidos que já o usaram (mesmo padrão de
-// Category/Product — exclusão só é permitida se nenhum pedido referenciar o bairro).
+// Área atendida pela entrega, identificada por PREFIXO DE CEP (não mais por
+// nome de bairro digitado livremente — ver §6.3 do HANDOFF). `active=false`
+// remove a zona do checkout sem apagar o histórico de pedidos que já a
+// usaram (mesmo padrão de Category/Product — exclusão só é permitida se
+// nenhum pedido referenciar a zona).
 model DeliveryZone {
   id           String   @id @default(cuid())
-  neighborhood String   @unique
+  neighborhood String   @unique // nome de exibição (ex: "Jardim Aparecidinha"), não é mais a chave de busca
+  // Prefixo dos dígitos do CEP (ex: "18095") — o pedido é encaixado na zona
+  // com o prefixo mais longo/específico que bater com o CEP digitado (ver
+  // findZoneForCep em delivery-zone-service.ts). Nullable só por causa de
+  // zonas antigas (de antes desta mudança) que nunca tiveram CEP — a
+  // validação da API exige o campo pra qualquer zona criada/editada agora.
+  cepPrefix    String?  @unique
   feeCents     Int
   active       Boolean  @default(true)
-  // Bairros reais (área de entrega) ficam visíveis no checkout do site. Zonas
+  // Zonas reais (área de entrega) ficam visíveis no checkout do site. Zonas
   // criadas só pra registrar um endereço/cliente específico com taxa
   // combinada à parte (ex: "Casa da Dona Maria nº222") ficam com
   // visibleToCustomers=false — continuam disponíveis pro admin usar na Venda
-  // no Balcão, mas não aparecem no dropdown público de bairros.
+  // no Balcão, mas não entram na busca por CEP do checkout público.
   visibleToCustomers Boolean @default(true)
   order        Int      @default(0)
   createdAt    DateTime @default(now())
@@ -200,25 +209,29 @@ model Order {
   cashChangeForCents Int? // troco: valor com que o cliente vai pagar (só quando paymentMethod = "dinheiro")
   wantsInvoice     Boolean   @default(false) // cliente marcou "quero nota fiscal" no checkout
   itemsTotalCents  Int
-  // Endereço de entrega: SNAPSHOT no momento do pedido (não usa mais bairro
-  // pré-cadastrado — o cliente digita o próprio bairro). Guardado no Order
+  // Endereço de entrega: SNAPSHOT no momento do pedido. Guardado no Order
   // (não só no Customer) porque o cadastro do Customer é mutável e um
   // cliente pode pedir de endereços diferentes em pedidos diferentes;
   // sem esse snapshot, pedidos antigos mostrariam o endereço ATUAL do
   // cliente na hora de reimprimir a comanda, não o de quando pediu.
   address          String?
   addressNumber    String?
+  // Nome do bairro da DeliveryZone encontrada pelo CEP no momento do pedido
+  // (não é mais digitado livremente pelo cliente — ver §6.3 do HANDOFF).
   neighborhood     String?
   complement       String?
   reference        String?
-  // Mantido só por compatibilidade com pedidos antigos (feitos quando a
-  // entrega ainda usava bairro pré-cadastrado com taxa fixa) — pedidos novos
-  // não usam mais. Não é referenciado por nenhum fluxo de criação de pedido.
+  cep              String? // dígitos do CEP digitado no checkout, sem hífen
+  // Zona (bairro/CEP) encontrada pelo CEP digitado no checkout — define
+  // `deliveryFeeCents` automaticamente na criação do pedido (ver createOrder
+  // em order-service.ts). RESTRICT: não deixa apagar uma zona já usada em
+  // pedido (só desativar).
   deliveryZoneId   String?
   deliveryZone     DeliveryZone? @relation(fields: [deliveryZoneId], references: [id], onDelete: Restrict)
-  // Para pedidos de entrega novos, começa em 0 e é definido pelo admin ao
-  // aprovar a entrega (approveDelivery) — sem bairro pré-cadastrado não dá
-  // pra calcular a taxa sozinho.
+  // Preenchido automaticamente a partir da DeliveryZone encontrada pelo CEP —
+  // a loja ainda confirma o pedido antes de liberar o Pix (ver
+  // approveDelivery), podendo ajustar o valor numa exceção pontual dentro da
+  // área (rua que não atende, etc), mas o ponto de partida já vem certo.
   deliveryFeeCents Int       @default(0)
   totalCents       Int
   // Preenchido só quando a entrega é recusada pelo admin (rejectDelivery).

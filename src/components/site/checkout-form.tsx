@@ -20,6 +20,13 @@ import {
   type CartStoreHook,
 } from "@/store/cart-store";
 import { buildWhatsAppOrderLink, orderToWhatsAppSummary } from "@/lib/whatsapp";
+import { sanitizeCep, formatCep, isValidCep } from "@/lib/cep";
+
+type CepLookupState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "found"; neighborhood: string; feeCents: number }
+  | { status: "not_found" };
 
 function generatePlaceholderPhone(): string {
   // Telefone é único no cadastro do cliente — precisa de entropia suficiente
@@ -69,7 +76,8 @@ export function CheckoutForm({
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [addressNumber, setAddressNumber] = useState("");
-  const [neighborhood, setNeighborhood] = useState("");
+  const [cep, setCep] = useState("");
+  const [cepLookup, setCepLookup] = useState<CepLookupState>({ status: "idle" });
   const [complement, setComplement] = useState("");
   const [reference, setReference] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
@@ -99,16 +107,66 @@ export function CheckoutForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items.length, hasSubmitted, redirectIfEmpty]);
 
-  const subtotal = getCartSubtotalCents(items);
   const isDelivery = deliveryType === "entrega";
-  // A taxa de entrega não é mais calculada na hora — sem bairro pré-cadastrado,
-  // só a loja sabe se aquele endereço é viável e quanto cobrar. O total exibido
-  // aqui é só dos itens; a loja confirma o valor final com a taxa ao aceitar.
-  const total = subtotal;
+
+  useEffect(() => {
+    let cancelled = false;
+    const digits = sanitizeCep(cep);
+
+    if (!isDelivery || !isValidCep(digits)) {
+      // Reset assíncrono (não direto no corpo do efeito) pra não disparar
+      // renderizações em cascata durante a fase de commit do React.
+      const resetTimer = setTimeout(() => {
+        if (!cancelled) setCepLookup({ status: "idle" });
+      }, 0);
+      return () => {
+        cancelled = true;
+        clearTimeout(resetTimer);
+      };
+    }
+
+    const loadingTimer = setTimeout(() => {
+      if (!cancelled) setCepLookup({ status: "loading" });
+    }, 0);
+    const lookupTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/delivery-zones/lookup?cep=${digits}`);
+        const data = await res.json().catch(() => null);
+        if (cancelled) return;
+        if (res.ok) {
+          setCepLookup({ status: "found", neighborhood: data.neighborhood, feeCents: data.feeCents });
+        } else {
+          setCepLookup({ status: "not_found" });
+        }
+      } catch {
+        if (!cancelled) setCepLookup({ status: "not_found" });
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(loadingTimer);
+      clearTimeout(lookupTimer);
+    };
+  }, [cep, isDelivery]);
+
+  const subtotal = getCartSubtotalCents(items);
+  const deliveryFeeCents = cepLookup.status === "found" ? cepLookup.feeCents : 0;
+  const total = subtotal + deliveryFeeCents;
+  const canSubmitDelivery = !isDelivery || cepLookup.status === "found";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+
+    if (!canSubmitDelivery) {
+      setError(
+        cepLookup.status === "not_found"
+          ? "Não entregamos nesse CEP."
+          : "Informe um CEP válido pra calcular a taxa de entrega."
+      );
+      return;
+    }
 
     const cashChangeForCents =
       paymentMethod === "dinheiro" && needsChange && cashPayValue
@@ -137,7 +195,7 @@ export function CheckoutForm({
             phone: phone || generatePlaceholderPhone(),
             address: isDelivery ? address : undefined,
             addressNumber: isDelivery ? addressNumber || undefined : undefined,
-            neighborhood: isDelivery ? neighborhood : undefined,
+            cep: isDelivery ? sanitizeCep(cep) : undefined,
             complement: isDelivery ? complement || undefined : undefined,
             reference: isDelivery ? reference || undefined : undefined,
           },
@@ -215,18 +273,24 @@ export function CheckoutForm({
           {isDelivery && (
             <div className="flex justify-between text-neutral-500">
               <span>Taxa de entrega</span>
-              <span>A combinar</span>
+              <span>
+                {cepLookup.status === "found"
+                  ? cepLookup.feeCents > 0
+                    ? formatCentsToBRL(cepLookup.feeCents)
+                    : "Grátis"
+                  : "Digite o CEP"}
+              </span>
             </div>
           )}
           <div className="flex justify-between text-base font-bold text-neutral-900">
-            <span>{isDelivery ? "Total (sem a entrega)" : "Total"}</span>
+            <span>Total</span>
             <span>{formatCentsToBRL(total)}</span>
           </div>
         </div>
         {isDelivery && (
           <p className="mt-2 text-xs text-neutral-400">
-            A taxa de entrega depende do seu endereço — a loja confirma o valor final ao aceitar
-            seu pedido.
+            A loja ainda confirma seu endereço antes de liberar o pagamento — o valor da taxa já
+            vem certo pelo CEP, mas pode ser ajustado numa exceção pontual.
           </p>
         )}
       </div>
@@ -273,6 +337,32 @@ export function CheckoutForm({
         />
         {isDelivery && (
           <>
+            <div>
+              <Input
+                name="cep"
+                label="CEP"
+                required
+                inputMode="numeric"
+                placeholder="00000-000"
+                autoComplete="postal-code"
+                value={formatCep(cep)}
+                onChange={(e) => setCep(sanitizeCep(e.target.value))}
+              />
+              {cepLookup.status === "loading" && (
+                <p className="mt-1 text-xs text-neutral-400">Verificando...</p>
+              )}
+              {cepLookup.status === "found" && (
+                <p className="mt-1 text-xs font-medium text-emerald-600">
+                  Entregamos em {cepLookup.neighborhood} — taxa{" "}
+                  {cepLookup.feeCents > 0 ? formatCentsToBRL(cepLookup.feeCents) : "grátis"}
+                </p>
+              )}
+              {cepLookup.status === "not_found" && (
+                <p className="mt-1 text-xs font-medium text-red-600">
+                  Não entregamos nesse CEP.
+                </p>
+              )}
+            </div>
             <Input
               name="address"
               label="Endereço"
@@ -281,21 +371,12 @@ export function CheckoutForm({
               value={address}
               onChange={(e) => setAddress(e.target.value)}
             />
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                name="addressNumber"
-                label="Número"
-                value={addressNumber}
-                onChange={(e) => setAddressNumber(e.target.value)}
-              />
-              <Input
-                name="neighborhood"
-                label="Bairro"
-                required
-                value={neighborhood}
-                onChange={(e) => setNeighborhood(e.target.value)}
-              />
-            </div>
+            <Input
+              name="addressNumber"
+              label="Número"
+              value={addressNumber}
+              onChange={(e) => setAddressNumber(e.target.value)}
+            />
             <Input
               name="complement"
               label="Complemento"
@@ -401,7 +482,13 @@ export function CheckoutForm({
 
       {error && <p className="text-sm font-medium text-red-600">{error}</p>}
 
-      <Button type="submit" size="lg" loading={submitting} disabled={!storeOpen} className="w-full">
+      <Button
+        type="submit"
+        size="lg"
+        loading={submitting}
+        disabled={!storeOpen || !canSubmitDelivery}
+        className="w-full"
+      >
         {submitLabel}
       </Button>
     </form>

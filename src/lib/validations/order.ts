@@ -21,7 +21,16 @@ export const createOrderSchema = z
         .regex(/^[0-9()+\-.\s]+$/, "Telefone inválido"),
       address: z.string().trim().max(200).optional(),
       addressNumber: z.string().trim().max(20).optional(),
+      // Não é mais digitado livremente — vem da DeliveryZone encontrada pelo
+      // CEP (ver createOrder em order-service.ts). Mantido opcional aqui só
+      // por segurança de tipo; o valor enviado pelo cliente é ignorado.
       neighborhood: z.string().trim().max(100).optional(),
+      cep: z
+        .string()
+        .trim()
+        .transform((v) => v.replace(/\D/g, ""))
+        .refine((v) => v.length === 0 || v.length === 8, "CEP inválido")
+        .optional(),
       complement: z.string().trim().max(120).optional(),
       reference: z.string().trim().max(200).optional(),
     }),
@@ -48,11 +57,11 @@ export const createOrderSchema = z
         message: "Informe o endereço para entrega",
       });
     }
-    if (data.deliveryType === "entrega" && (!data.customer.neighborhood || data.customer.neighborhood.trim().length < 2)) {
+    if (data.deliveryType === "entrega" && (!data.customer.cep || data.customer.cep.length !== 8)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["customer", "neighborhood"],
-        message: "Informe o bairro para entrega",
+        path: ["customer", "cep"],
+        message: "Informe o CEP para entrega",
       });
     }
     if (data.cashChangeForCents !== undefined && data.paymentMethod !== "dinheiro") {

@@ -4,12 +4,19 @@
 > conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
 > algo mudar de forma relevante, atualize este arquivo.
 >
-> Última atualização: 2026-08-13 (pedidos do cliente pós-lançamento: chave Pix simples com
-> QR Code gerado localmente, sem depender do PagBank — ver §10.1; pedido Pix só entra no
-> Kanban depois que o admin confirma manualmente o pagamento — ver §6.2; botão pra ocultar
-> os valores de venda no dashboard, já que a tela fica visível pra qualquer um perto do
-> balcão — ver §9.1). Atualização anterior (2026-08-06): reformulação grande do fluxo de
-> pedidos: endereço/bairro
+> Última atualização: 2026-08-14 (taxa de entrega automática por prefixo de CEP — voltou
+> a usar `DeliveryZone`, agora indexado por CEP em vez de nome de bairro, bloqueando
+> pedido fora da área atendida — ver §6.3; tela do cliente `/pedido/[id]` passou a
+> atualizar sozinha via polling, antes ficava travada até recarregar manualmente — ver
+> §6; Pix só é liberado pro cliente depois que a entrega é aprovada, pra não cobrar sem a
+> taxa — ver §10.1; cancelamento trava depois de "saiu para entrega" e agora avisa o
+> cliente no WhatsApp; cliente ganhou botões de "Pix feito"/cancelar pedido sozinho na
+> tela dele). Atualização anterior (2026-08-13): chave Pix simples com QR Code gerado
+> localmente sem depender do PagBank — ver §10.1; tentativa de esconder pedido Pix do
+> Kanban até confirmação manual, testada e revertida no mesmo dia — ver §6.2; botão pra
+> ocultar os valores de venda no dashboard — ver §9.1; banner de cobrança da mensalidade
+> do sistema + painel `/admin/dev` pro desenvolvedor. Atualização anterior (2026-08-06):
+> reformulação grande do fluxo de pedidos: endereço/bairro
 > digitado livremente, aprovação manual da entrega pelo admin, status "Pronto para
 > retirada" separado de "Saiu para entrega", comanda reescrita com endereço/pagamento
 > completos, avisos de WhatsApp pro cliente via link manual — ver §6 e §6.1). Atualização
@@ -266,8 +273,8 @@ PagBankConfig      (singleton, id fixo "default")
 | `Cliente` / `ClienteUsuario` | empresas assinantes do portal B2B | **não é o consumidor final** — ver §8 |
 | `Category` / `Product` / `ProductAddon` | cardápio | `Product` tem `ncm`/`cfop`/`csosnCst`/`unidadeComercial` opcionais (fiscal) |
 | `Customer` | consumidor final (quem faz o pedido) | `phone` é `@unique` — usado como chave de upsert |
-| `DeliveryZone` | **legado** (ver §6.1/§7) — não é mais usado na criação de pedidos desde 2026-08-06, mantido só por compatibilidade com pedidos antigos e uso interno na Venda no Balcão |
-| `Order` | pedido | `status` (kanban), `paymentStatus` (Pix), `deliveryType`, `wantsInvoice`, `paymentMethod`, `address`/`addressNumber`/`neighborhood`/`complement`/`reference` (snapshot do endereço digitado, só entrega — ver §6.1), `rejectionReason`, `notifiedStatuses` |
+| `DeliveryZone` | zona de entrega indexada por prefixo de CEP (`cepPrefix`) + taxa fixa — ver §6.3/§7. Voltou a ser usada na criação de pedidos em 2026-08-14 (tinha ficado sem uso entre 2026-08-06 e 2026-08-14) |
+| `Order` | pedido | `status` (kanban), `paymentStatus` (Pix), `deliveryType`, `wantsInvoice`, `paymentMethod`, `address`/`addressNumber`/`neighborhood`/`cep`/`complement`/`reference` (snapshot do endereço no momento do pedido, só entrega — ver §6.1/§6.3), `deliveryZoneId` (zona encontrada pelo CEP), `rejectionReason`, `notifiedStatuses` |
 | `OrderItem` / `OrderItemAddon` | itens do pedido | snapshot de nome/preço no momento da compra |
 | `OrderStatusHistory` | auditoria de mudança de status | |
 | `Settings` | configuração da loja | cores, horário, forma de pagamento aceita, `pixKey`/`pixCity` (chave Pix simples — ver §10.1), etc. |
@@ -282,9 +289,9 @@ PagBankConfig      (singleton, id fixo "default")
   — `"saiu_entrega"` só pra `deliveryType="entrega"`, `"pronto_retirada"` só pra
   `"retirada"`/`"balcao"` (nunca os dois; ver `getNextStatus`/`getNextStatusActionLabel`
   em `src/lib/constants.ts`). `"recebido"` + `"entrega"` significa "aguardando
-  confirmação da entrega" — ver §6.1. `"aguardando_pagamento"` só existe pra pedidos
-  Pix pagos com a chave simples (ver §10.1/§6.2) — fica **fora do Kanban** até o admin
-  confirmar manualmente.
+  confirmação da entrega" — ver §6.1. `"aguardando_pagamento"` é um valor válido mas
+  **não é mais usado pela criação de pedidos** (testado e revertido — ver §6.2); só
+  apareceria em pedidos antigos daquele período curto.
 - `Order.deliveryType`: `"entrega" | "retirada" | "balcao"`
 - `Order.paymentMethod`: `"pix" | "dinheiro" | "cartao_credito" | "cartao_debito"`
 - `Order.paymentStatus`: `"pendente" | "pago" | "erro"`
@@ -298,7 +305,7 @@ PagBankConfig      (singleton, id fixo "default")
 - `@@index([productId])` em `OrderItem`.
 - `@@index([externalId])` em `PixCharge` (consultado a cada webhook do PagBank).
 - `Customer.phone`, `Order.orderNumber`, `Cliente.cnpj/email`, `Admin.email`,
-  `DeliveryZone.neighborhood` — todos `@unique`.
+  `DeliveryZone.neighborhood`, `DeliveryZone.cepPrefix` — todos `@unique`.
 - `onDelete: Cascade` em tudo que é "filho" de `Order`/`Product`/`Cliente`.
 - `onDelete: Restrict` em `Order.deliveryZone` (não deixa apagar bairro com pedido).
 
@@ -313,9 +320,12 @@ PagBankConfig      (singleton, id fixo "default")
 | `20260714150000_add_pix_charge_external_id_index` | índice em `PixCharge.externalId` |
 | `20260714160000_fiscal_config_env_based_credentials` | remove `provider`/`ambiente`/`clientId`/`clientSecretEncrypted` de `FiscalConfig` (foram para env vars) |
 | `20260714170000_add_missing_fk_indexes` | índices que faltavam em FKs (`customerId`, `deliveryZoneId`, `productId`) |
-| `20260801230000_add_delivery_zone_visibility` | `DeliveryZone.visibleToCustomers` (hoje sem uso prático — ver `20260806140000` abaixo) |
+| `20260801230000_add_delivery_zone_visibility` | `DeliveryZone.visibleToCustomers` (voltou a ter uso prático em `20260814180000` abaixo) |
 | `20260806140000_order_address_snapshot_and_approval` | `Order.address/addressNumber/neighborhood/complement/reference` (snapshot), `Order.rejectionReason`, `Order.notifiedStatuses` — ver §6.1. Faz backfill dos pedidos existentes a partir do Customer/DeliveryZone vinculado. |
-| `20260813150000_pix_key_and_payment_gate` | `Settings.pixKey`/`Settings.pixCity` — ver §10.1. (`Order.status="aguardando_pagamento"` é só um novo valor de string, não precisa de migration — ver §6.2.) |
+| `20260813150000_pix_key_and_payment_gate` | `Settings.pixKey`/`Settings.pixCity` — ver §10.1. (`Order.status="aguardando_pagamento"` é só um novo valor de string, não precisa de migration — ver §6.2, revertido no mesmo dia.) |
+| `20260813180000_add_mensalidade_paga_em` | `Settings.mensalidadePagaEm` — controla o banner de cobrança da mensalidade do sistema no dashboard (mostrado do dia 25 ao fim do mês) e o painel `/admin/dev` (senha própria via `DEV_PANEL_PASSWORD`, separada do login da loja) onde o desenvolvedor marca o mês como pago |
+| `20260814120000_add_pix_key_type` | `Settings.pixKeyType` — ver §10.1 |
+| `20260814180000_delivery_zone_by_cep` | `DeliveryZone.cepPrefix` (nullable, `@unique`), `Customer.cep`, `Order.cep` — ver §6.3. `cepPrefix` nullable de propósito: zonas cadastradas antes dessa migration não tinham CEP, e Postgres permite múltiplos `NULL` numa coluna `@unique`. |
 
 ⚠️ **Nota histórica**: existe uma migration `20260703143145_init_postgres` registrada na
 tabela `_prisma_migrations` do banco de produção que **não tem pasta correspondente** no
@@ -409,32 +419,36 @@ botão "Avisar cliente no WhatsApp" com a mensagem certa pronta — ver §6.1.
 Fiscalmente, `retirada` e `balcao` são tratados como `indPres: 1` (presencial); `entrega`
 como `indPres: 4`.
 
-### 6.1 Endereço livre, aprovação de entrega e avisos por WhatsApp (2026-08-06)
+### 6.1 Endereço por CEP, aprovação de entrega e avisos por WhatsApp (2026-08-06, mudou de novo em 2026-08-14 — ver §6.3)
 
-Antes, o cliente escolhia o bairro de uma lista pré-cadastrada (`DeliveryZone`), com taxa
-fixa calculada automaticamente. Isso mudou: **o cliente digita o próprio endereço e
-bairro livremente** — não existe mais lista, e a taxa não é mais calculada sozinha (não
-tem como, sem saber o bairro de antemão). `DeliveryZoneManager`/`DeliveryZone` continuam
-existindo no código (não foram apagados — ver §7 e comentário em
-`configuracoes/page.tsx`), só não fazem mais parte do fluxo de pedido.
+Histórico: em 2026-08-06 o cadastro pré-definido de bairros (`DeliveryZone`) foi
+abandonado a favor de bairro digitado livremente pelo cliente, sem taxa automática. Em
+2026-08-14, a pedido da loja (bairro digitado gerava erro de digitação e taxa não vinha
+automática), **voltou a usar `DeliveryZone` — agora indexada por CEP, não mais por nome
+de bairro digitado**. Ver §6.3 para o fluxo atual completo. O resto desta seção
+(aprovação de entrega, avisos por WhatsApp) continua válido sem mudanças.
 
 ```
-Checkout (entrega): cliente digita endereço + número + BAIRRO (texto livre) + complemento
-+ ponto de referência → POST /api/orders
+Checkout (entrega): cliente digita endereço + número + CEP (busca automática a taxa) +
+complemento + ponto de referência → POST /api/orders
    ↓
-createOrder(): grava um SNAPSHOT desses campos direto no Order (Order.address,
-addressNumber, neighborhood, complement, reference) — não só no Customer, que é mutável
-e pode ter endereço diferente em cada pedido. deliveryFeeCents fica 0 (pendente).
+createOrder(): encontra a DeliveryZone pelo CEP (ver §6.3) e grava um SNAPSHOT desses
+campos direto no Order (Order.address, addressNumber, neighborhood, cep, complement,
+reference) — não só no Customer, que é mutável e pode ter endereço diferente em cada
+pedido. deliveryFeeCents já vem preenchido com a taxa da zona encontrada (não é mais 0).
    ↓
 Pedido cai no Kanban em "recebido" com o card mostrando "⚠️ Aguardando confirmação da
 entrega" (order-card.tsx) em vez do botão normal — só acontece pra deliveryType="entrega".
+Isso continua existindo mesmo com a taxa já calculada, porque a loja quer confirmar o
+endereço antes de liberar o Pix (ver §6.3) e pode haver exceção pontual dentro da área.
    ↓
 Admin vê endereço/bairro/referência no próprio card e decide:
 
   ACEITAR (POST /api/orders/[id]/approve-delivery, body {feeCents})
     → approveDelivery() em order-service.ts: só aceita se status="recebido" E
       deliveryType="entrega" (senão 400 NOT_PENDING_APPROVAL); define
-      deliveryFeeCents/totalCents com o valor que o admin digitou (prompt simples) e
+      deliveryFeeCents/totalCents com o valor confirmado (prompt já vem PRÉ-PREENCHIDO
+      com a taxa calculada pelo CEP — o admin só confirma ou ajusta numa exceção) e
       avança pra "preparando" — dispara impressão automática da comanda já com o
       endereço completo.
 
@@ -471,42 +485,70 @@ contratar a API oficial ficou de fora por enquanto).
   lógica. Na prática, se o funcionário já sabe a taxa (está com o cliente/telefone na
   mão), ele mesmo aprova o próprio pedido logo em seguida no Kanban.
 
-### 6.2 Pedido Pix só "entra" após confirmação de pagamento (2026-08-13)
+### 6.2 Pix escondido até confirmação manual — testado e REVERTIDO (2026-08-13)
 
-Pedido a pedido do cliente: valores de venda expostos na tela do Kanban e Pix
-que os clientes não conseguiam pagar (não tinha chave Pix cadastrada) — ver
-§10.1 pra chave Pix e §9.1 pra ocultar valores. Este item é o "só lançar o
-pedido depois do pagamento".
+Chegou a existir uma versão em que todo pedido Pix nascia em
+`status="aguardando_pagamento"`, ficava fora do Kanban (banner separado) até o admin
+clicar "Confirmar pagamento". **Foi revertido no mesmo dia** — confundia a loja, que não
+sabia que precisava ir atrás dos pedidos Pix num lugar diferente do resto. Pedido do
+próprio cliente: "deixa os pedidos por pix no mesmo lugar".
 
-Só se aplica a **Pix com chave simples cadastrada** (`Settings.pixKey`
-preenchida) — dinheiro/cartão são pagos na entrega/retirada, não tem como
-confirmar antes, então continuam entrando direto no Kanban como sempre.
-Pix sem chave cadastrada (fluxo legado do PagBank, que já confirma sozinho
-pelo webhook) também não passa por aqui.
+O que ficou, permanentemente, dessa tentativa:
+- `"aguardando_pagamento"` continua existindo como valor válido de `Order.status` (só não
+  é mais usado por `createOrder` — todo pedido novo nasce em `"recebido"` igual antes).
+- O botão **"Confirmar Pix recebido"** — ver §10.1 — ficou (é útil de qualquer forma,
+  não depende do gate revertido).
+- `/api/orders/[id]/confirm-payment` e `confirmPixPayment()` em `order-service.ts`
+  continuam existindo, só não fazem mais transição de status — só marcam
+  `paymentStatus="pago"`, sem mexer no Kanban.
+
+O motivo original (Pix cobrado com o valor errado quando tinha taxa de entrega) foi
+resolvido de outro jeito, sem esconder o pedido — ver §6.3 (Pix só é liberado pro cliente
+depois que a entrega é aprovada, mas o pedido continua visível no Kanban o tempo todo).
+
+### 6.3 Taxa de entrega automática por CEP (2026-08-14)
+
+Pedido da loja: bairro digitado à mão gerava erro de digitação/CEP incorreto e a taxa
+não vinha automática, obrigando o admin a adivinhar o valor toda vez. Voltou a usar
+`DeliveryZone` — só que agora a chave de busca é **prefixo de CEP**, não nome de bairro
+(`DeliveryZone.cepPrefix`, ver §4). Zona = bairro (nome de exibição) + prefixo de CEP +
+taxa fixa. Cadastro em Configurações → "Área de entrega por CEP"
+(`DeliveryZoneManager`), mesmo componente/API que existia desde antes de 2026-08-06,
+só que com um campo de CEP a mais.
 
 ```
-createOrder(): se paymentMethod="pix" E Settings.pixKey preenchida →
-  Order nasce com status="aguardando_pagamento" (constante em
-  src/lib/constants.ts, isValidStatusTransition só permite ir daqui pra
-  "cancelado" ou, via confirmPixPayment, pra "recebido")
+Checkout: cliente digita o CEP → useEffect debounced (500ms) em checkout-form.tsx chama
+GET /api/delivery-zones/lookup?cep=XXXXXXXX (público, rate-limited)
    ↓
-listOrders() (usada pelo Kanban) EXCLUI status="aguardando_pagamento" — o
-pedido não aparece nas colunas normais. listPendingPixPayments() lista só
-esses, usada no banner laranja acima do Kanban (kanban-board.tsx), com
-nome/valor/nº do pedido e botão "Confirmar pagamento".
+findZoneForCep() [delivery-zone-service.ts]: entre as zonas ATIVAS, acha a com o
+cepPrefix mais LONGO que seja prefixo do CEP digitado (mais específico vence — ex:
+"180950" bate antes de "18095" se os dois estiverem cadastrados)
    ↓
-Admin confere o Pix caído no aplicativo do banco (não existe confirmação
-automática — é um QR estático, sem webhook) e clica "Confirmar pagamento"
+Achou: mostra bairro + taxa na tela, total do pedido já soma a taxa. Não achou: bloqueia
+o envio do pedido ("Não entregamos nesse CEP.") — decisão explícita da loja, prefere não
+receber pedido que vai ter que recusar depois.
    ↓
-POST /api/orders/[id]/confirm-payment → confirmPixPayment() em
-order-service.ts: muda status→"recebido" + paymentStatus→"pago", grava
-OrderStatusHistory — dali em diante segue o fluxo normal (inclusive
-aprovação de entrega, se for o caso — ver §6.1).
+POST /api/orders (createOrder): RE-VALIDA o CEP no servidor (nunca confia só no que o
+front calculou) — mesma busca por prefixo. Sem zona encontrada → 400 CEP_NOT_COVERED,
+pedido nem é criado. Achou: Order.deliveryFeeCents/neighborhood/deliveryZoneId/cep já
+saem preenchidos na criação (não é mais 0 esperando o admin aprovar).
+   ↓
+Pedido cai no Kanban igual sempre, com "⚠️ Aguardando confirmação da entrega" — a loja
+ainda confirma antes do Pix ser liberado (ver §10.1), mas o prompt de taxa já vem
+PRÉ-PREENCHIDO com o valor certo (só confirma, ou ajusta numa exceção pontual — ex: uma
+rua específica dentro da área que não atende).
 ```
 
-Enquanto "aguardando_pagamento", o pedido também fica de fora do cálculo de
-`getTodayStats()` (não conta como vendido nem como pedido em aberto) — só
-passa a contar depois que o pagamento é confirmado.
+- Granularidade do prefixo é livre (3 a 8 dígitos) — a loja decide: prefixo curto cobre
+  uma área grande de uma vez, prefixo longo (quase o CEP completo) isola uma rua
+  específica com taxa diferente do resto do bairro.
+- `DeliveryZone.visibleToCustomers=false` continua existindo (ver §7) — zona "só admin"
+  não entra na busca pública do checkout, mas pode ser usada manualmente na Venda no
+  Balcão.
+- Zonas antigas (cadastradas antes de 2026-08-14, se houver) ficam com `cepPrefix=null`
+  até alguém editar e preencher — `findZoneForCep` ignora zonas sem CEP.
+- `Customer.cep`/`Order.cep` guardam os dígitos do CEP digitado (snapshot, mesmo padrão
+  dos outros campos de endereço).
 
 ### Forma de pagamento "Combinar pelo WhatsApp"
 
@@ -558,18 +600,20 @@ Se Pix: mostra o PixPaymentPanel inline na própria tela (pra exibir o QR no bal
 Se não-Pix: mostra "Venda registrada!" + botões "Nova venda" / "Ver pedidos"
 ```
 
-### Bairros "só admin" (`DeliveryZone.visibleToCustomers`)
+### Zonas "só admin" (`DeliveryZone.visibleToCustomers`)
 
-A Venda no Balcão usa `listActiveDeliveryZonesForStaff()` (todos os bairros ativos),
-diferente do checkout do site, que usa `listActiveDeliveryZones()` (só
-`visibleToCustomers=true`). Isso permite cadastrar em Configurações → "Bairros e taxa de
-entrega" zonas de uso interno — ex: o endereço específico de um cliente fixo com taxa
-combinada à parte (`"Casa da Dona Maria nº222"`, taxa mais alta) — sem que isso apareça
-como opção pra qualquer cliente no checkout público. Basta desmarcar "Visível para o
-cliente no site" ao criar/editar o bairro. A restrição de área de entrega (ex: só
-Aparecidinha até o Éden, em Sorocaba) é feita da mesma forma: cadastre só os bairros
-reais dentro da área desejada como `visibleToCustomers=true` — o cliente só consegue
-escolher entre os bairros que existem na lista, não tem campo de texto livre.
+Desde 2026-08-14, site e Venda no Balcão usam o **mesmo** endpoint de busca por CEP
+(`GET /api/delivery-zones/lookup`, ver §6.3) — a diferença é a sessão: sem login de
+admin, só encontra zonas com `visibleToCustomers=true`; logado (Venda no Balcão sempre
+está, é uma tela protegida), também encontra as marcadas como "só admin". Isso permite
+cadastrar em Configurações → "Área de entrega por CEP" zonas de uso interno — ex: o
+endereço específico de um cliente fixo com taxa combinada à parte (`"Casa da Dona Maria
+nº222"`, taxa mais alta) — sem que isso apareça como opção pra qualquer cliente no
+checkout público. Basta desmarcar "Visível para o cliente no site" ao criar/editar a
+zona. A restrição de área de entrega (ex: só Aparecidinha até o Éden, em Sorocaba) é
+feita da mesma forma: cadastre só os prefixos de CEP reais dentro da área desejada como
+`visibleToCustomers=true` — CEPs fora dos prefixos cadastrados são bloqueados no
+checkout (ver §6.3).
 
 ---
 
