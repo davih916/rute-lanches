@@ -57,13 +57,9 @@ export const createOrderSchema = z
         message: "Informe o endereço para entrega",
       });
     }
-    if (data.deliveryType === "entrega" && (!data.customer.cep || data.customer.cep.length !== 8)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["customer", "cep"],
-        message: "Informe o CEP para entrega",
-      });
-    }
+    // CEP é opcional (não bloqueia o pedido) — ver createOrder em
+    // order-service.ts. Só valida o formato quando preenchido (8 dígitos),
+    // já garantido pelo schema do campo em si.
     if (data.cashChangeForCents !== undefined && data.paymentMethod !== "dinheiro") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -102,18 +102,16 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
     });
   }
 
-  // Entrega usa a zona encontrada pelo CEP digitado — bloqueia o pedido se o
-  // CEP não estiver em nenhuma zona cadastrada (cliente fora da área
-  // atendida). A loja ainda confirma o endereço antes do Pix ser liberado
-  // (ver approveDelivery/getOrCreatePixCharge), podendo ajustar a taxa numa
-  // exceção pontual, mas o valor de partida já vem certo.
+  // Entrega usa a zona encontrada pelo CEP digitado, SE existir uma
+  // cadastrada que bata — mas não bloqueia o pedido se não achar (zona por
+  // CEP é opcional: enquanto a loja não cadastra a lista completa em
+  // Configurações, cai de volta pro fluxo antigo — taxa 0, admin define ao
+  // aprovar a entrega, ver approveDelivery). Bloquear aqui sem nenhuma zona
+  // cadastrada travaria TODO pedido de entrega.
   let deliveryZoneMatch: Awaited<ReturnType<typeof findZoneForCep>> = null;
   if (input.deliveryType === "entrega") {
     const cep = input.customer.cep ?? "";
-    deliveryZoneMatch = await findZoneForCep(cep);
-    if (!deliveryZoneMatch) {
-      throw new OrderServiceError("Não entregamos nesse CEP.", "CEP_NOT_COVERED");
-    }
+    deliveryZoneMatch = cep ? await findZoneForCep(cep) : null;
   }
   const deliveryFeeCents = deliveryZoneMatch?.feeCents ?? 0;
   const totalCents = itemsTotalCents + deliveryFeeCents;

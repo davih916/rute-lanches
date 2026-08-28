@@ -151,22 +151,17 @@ export function CheckoutForm({
   }, [cep, isDelivery]);
 
   const subtotal = getCartSubtotalCents(items);
-  const deliveryFeeCents = cepLookup.status === "found" ? cepLookup.feeCents : 0;
+  // Busca por CEP é só um bônus (preenche a taxa automático quando a loja já
+  // cadastrou a zona) — NUNCA bloqueia o pedido, mesmo sem achar nada, pra
+  // não travar todo pedido de entrega enquanto a lista de zonas ainda não
+  // está completa (ver createOrder em order-service.ts).
+  const deliveryFeeKnown = cepLookup.status === "found";
+  const deliveryFeeCents = deliveryFeeKnown ? cepLookup.feeCents : 0;
   const total = subtotal + deliveryFeeCents;
-  const canSubmitDelivery = !isDelivery || cepLookup.status === "found";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-
-    if (!canSubmitDelivery) {
-      setError(
-        cepLookup.status === "not_found"
-          ? "Não entregamos nesse CEP."
-          : "Informe um CEP válido pra calcular a taxa de entrega."
-      );
-      return;
-    }
 
     const cashChangeForCents =
       paymentMethod === "dinheiro" && needsChange && cashPayValue
@@ -274,23 +269,24 @@ export function CheckoutForm({
             <div className="flex justify-between text-neutral-500">
               <span>Taxa de entrega</span>
               <span>
-                {cepLookup.status === "found"
+                {deliveryFeeKnown
                   ? cepLookup.feeCents > 0
                     ? formatCentsToBRL(cepLookup.feeCents)
                     : "Grátis"
-                  : "Digite o CEP"}
+                  : "A combinar"}
               </span>
             </div>
           )}
           <div className="flex justify-between text-base font-bold text-neutral-900">
-            <span>Total</span>
+            <span>{isDelivery && !deliveryFeeKnown ? "Total (sem a entrega)" : "Total"}</span>
             <span>{formatCentsToBRL(total)}</span>
           </div>
         </div>
         {isDelivery && (
           <p className="mt-2 text-xs text-neutral-400">
-            A loja ainda confirma seu endereço antes de liberar o pagamento — o valor da taxa já
-            vem certo pelo CEP, mas pode ser ajustado numa exceção pontual.
+            {deliveryFeeKnown
+              ? "A loja ainda confirma seu endereço antes de liberar o pagamento — o valor da taxa já vem certo pelo CEP, mas pode ser ajustado numa exceção pontual."
+              : "A taxa de entrega depende do seu endereço — a loja confirma o valor final ao aceitar seu pedido."}
           </p>
         )}
       </div>
@@ -340,8 +336,7 @@ export function CheckoutForm({
             <div>
               <Input
                 name="cep"
-                label="CEP"
-                required
+                label="CEP (opcional)"
                 inputMode="numeric"
                 placeholder="00000-000"
                 autoComplete="postal-code"
@@ -358,8 +353,8 @@ export function CheckoutForm({
                 </p>
               )}
               {cepLookup.status === "not_found" && (
-                <p className="mt-1 text-xs font-medium text-red-600">
-                  Não entregamos nesse CEP.
+                <p className="mt-1 text-xs text-neutral-400">
+                  Sem problema — a loja confirma a taxa de entrega manualmente.
                 </p>
               )}
             </div>
@@ -486,7 +481,7 @@ export function CheckoutForm({
         type="submit"
         size="lg"
         loading={submitting}
-        disabled={!storeOpen || !canSubmitDelivery}
+        disabled={!storeOpen}
         className="w-full"
       >
         {submitLabel}
