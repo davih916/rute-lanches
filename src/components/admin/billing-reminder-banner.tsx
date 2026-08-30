@@ -9,21 +9,24 @@ interface BillingReminderBannerProps {
   storeName: string;
   /** "YYYY-MM" do mês já confirmado como pago — ver Settings.mensalidadePagaEm. */
   mensalidadePagaEm: string | null;
+  /** Liga/desliga o banner por completo, independente do dia do mês — controlado em /admin/dev. */
+  reminderEnabled: boolean;
 }
 
 /**
  * Lembrete de mensalidade do sistema pra dona da loja, no fim de cada mês —
  * mostra um botão que abre o WhatsApp já com uma mensagem pronta pro
  * desenvolvedor. Some sozinho quando o desenvolvedor confirma o pagamento
- * pelo painel próprio (/admin/dev — ver src/app/admin/dev/page.tsx).
+ * pelo painel próprio (/admin/dev — ver src/app/admin/dev/page.tsx), ou pode
+ * ser desligado por completo por lá a qualquer momento.
  */
-export function BillingReminderBanner({ storeName, mensalidadePagaEm }: BillingReminderBannerProps) {
+export function BillingReminderBanner({ storeName, mensalidadePagaEm, reminderEnabled }: BillingReminderBannerProps) {
   const now = new Date();
   const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   const isEndOfMonth = now.getDate() >= BILLING_REMINDER_FROM_DAY;
   const alreadyPaid = mensalidadePagaEm === currentMonth;
 
-  if (!isEndOfMonth || alreadyPaid) return null;
+  if (!reminderEnabled || !isEndOfMonth || alreadyPaid) return null;
 
   const message = `Oi Davi! Aqui é a ${storeName}. Vim confirmar o pagamento da mensalidade do sistema desse mês 🙂`;
   const waLink = `https://wa.me/${DEV_WHATSAPP}?text=${encodeURIComponent(message)}`;

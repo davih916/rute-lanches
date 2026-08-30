@@ -4,7 +4,13 @@
 > conversa com IA) consiga assumir o desenvolvimento **sem perder contexto**. Sempre que
 > algo mudar de forma relevante, atualize este arquivo.
 >
-> Última atualização: 2026-08-14 (taxa de entrega automática por prefixo de CEP — voltou
+> Última atualização: 2026-08-15 (integração com o gateway de pagamento da Sharpify —
+> cobrança Pix real com confirmação quase automática, credenciais só em `/admin/dev`,
+> "totalmente separado" da mensalidade e do resto da loja — ver §10.0; painel
+> `/admin/dev` ganhou toggle pra ligar/desligar o banner de cobrança da mensalidade a
+> qualquer momento, não só por dia do mês — ver §9.1; mensagens de status por WhatsApp
+> pro cliente agora sempre trazem o resumo do pedido, itens e total — ver §6.1). Anterior
+> a essa (2026-08-14): taxa de entrega automática por prefixo de CEP — voltou
 > a usar `DeliveryZone`, agora indexado por CEP em vez de nome de bairro, bloqueando
 > pedido fora da área atendida — ver §6.3; tela do cliente `/pedido/[id]` passou a
 > atualizar sozinha via polling, antes ficava travada até recarregar manualmente — ver
@@ -326,6 +332,7 @@ PagBankConfig      (singleton, id fixo "default")
 | `20260813180000_add_mensalidade_paga_em` | `Settings.mensalidadePagaEm` — controla o banner de cobrança da mensalidade do sistema no dashboard (mostrado do dia 25 ao fim do mês) e o painel `/admin/dev` (senha própria via `DEV_PANEL_PASSWORD`, separada do login da loja) onde o desenvolvedor marca o mês como pago |
 | `20260814120000_add_pix_key_type` | `Settings.pixKeyType` — ver §10.1 |
 | `20260814180000_delivery_zone_by_cep` | `DeliveryZone.cepPrefix` (nullable, `@unique`), `Customer.cep`, `Order.cep` — ver §6.3. `cepPrefix` nullable de propósito: zonas cadastradas antes dessa migration não tinham CEP, e Postgres permite múltiplos `NULL` numa coluna `@unique`. |
+| `20260815120000_sharpify_and_dev_toggles` | Tabela `sharpify_config` (ver §10.0), `Settings.mensalidadeReminderEnabled` (liga/desliga o banner de cobrança — ver §9.1), `PixCharge.provider` (`"chave_simples" \| "sharpify" \| "pagbank"`) |
 
 ⚠️ **Nota histórica**: existe uma migration `20260703143145_init_postgres` registrada na
 tabela `_prisma_migrations` do banco de produção que **não tem pasta correspondente** no
@@ -715,39 +722,75 @@ Emissão de nota por pedido continua existindo via `FiscalAction`
 
 ## 10. Fluxo do Pix
 
-### 10.1 Chave Pix simples (caminho principal, desde 2026-08-13)
+`getOrCreatePixCharge()` [`pagbank-service.ts`] tenta, nessa ordem, o primeiro
+que estiver configurado — sem nenhum deles, o Pix fica indisponível:
 
-A loja não precisa de conta/API do PagBank pra receber Pix. Em
-`/admin/configuracoes` o admin cadastra `Settings.pixKey` (CPF/CNPJ/e-mail/
-telefone/chave aleatória) e `Settings.pixCity`. Com isso:
+1. **Sharpify** (§10.0) — cobrança real via gateway deles, confirmação quase
+   automática.
+2. **Chave Pix simples** (§10.1) — QR estático, confirmação manual.
+3. **PagBank** (§10.2) — legado, mantido só por compatibilidade.
+
+Independente do provider, pedidos de **entrega** só geram a cobrança Pix
+DEPOIS que a loja aprova o endereço/define a taxa (ver §6.1/§6.3) — sem isso
+o valor cobrado sairia sem a taxa. `getOrCreatePixCharge` lança
+`DELIVERY_PENDING` nesse caso, e a tela do cliente simplesmente não mostra o
+painel de pagamento ainda (ver `order-details-card.tsx`).
+
+### 10.0 Sharpify (caminho preferencial, desde 2026-08-15)
+
+Credenciais configuradas SÓ pelo desenvolvedor em `/admin/dev` (não aparece
+em `/admin/configuracoes` — "totalmente separado" da loja e da mensalidade, a
+pedido do próprio dev). Guardadas criptografadas (`SharpifyConfig`, mesmo
+padrão AES-256-GCM do PagBank) via `sharpify-config-service.ts`.
 
 ```
-Pedido criado com paymentMethod="pix" → /pedido/[id] renderiza PixPaymentPanel
-  → GET /api/orders/[id]/pix → getOrCreatePixCharge() [pagbank-service.ts]
-  - se Settings.pixKey estiver preenchida: gera o BR Code (Pix "copia e cola")
-    localmente com generatePixBRCode() [src/lib/pix-brcode.ts] — payload EMV
-    padrão Banco Central (chave + valor do pedido + CRC16), sem chamar API
-    nenhuma — e renderiza o QR Code (pacote `qrcode`, imagem data: URL)
-  - se não houver chave cadastrada: cai no fluxo legado do PagBank (ver 10.2)
+getOrCreatePixCharge(): se isSharpifyConfigured() →
+  createSharpifyPixCharge() [sharpify-service.ts]: POST
+  /api/v1/checkout/payment-link/create (api.sharpify.com.br), headers
+  x-sharpify-client-id/x-sharpify-client-secret, gatewayMethod="PIX"
+   ↓
+  Salva PixCharge.provider="sharpify", externalId=id do payment link,
+  qrCodeText=código copia-e-cola devolvido — gera a imagem do QR localmente
+  (pacote `qrcode`, igual ao caminho da chave simples)
+   ↓
+  A cada consulta do cliente (GET /api/orders/[id]/pix, chamado a cada 5s
+  pelo PixPaymentPanel) — ANTES de devolver a cobrança já existente — chama
+  isSharpifyPaymentApproved() (GET .../payment-link/get) e, se aprovado,
+  confirma sozinho via confirmPixPayment() [order-service.ts]. Não é webhook
+  de verdade, é "polling piggybacked" no polling que a tela do cliente já
+  fazia — mas dá confirmação praticamente automática sem precisar expor um
+  endpoint de webhook nem manter WebSocket vivo.
 ```
 
-**Não existe confirmação automática nesse caminho** (não há webhook — é só um
-QR estático). O pedido fica com `status="aguardando_pagamento"` (fora do
-Kanban, ver §6.2) até o admin conferir o Pix caído no aplicativo do próprio
-banco e clicar em "Confirmar pagamento" no banner laranja acima do Kanban
-(`POST /api/orders/[id]/confirm-payment` → `confirmPixPayment()` em
-`order-service.ts`), que move o pedido pra `status="recebido"` e
-`paymentStatus="pago"`.
+A Sharpify é uma plataforma de loja virtual (produtos digitais, afiliados
+etc.) **não relacionada ao sistema da Rute Lanches** — só o gateway de
+pagamento Pix dela é usado aqui, isoladamente. Não existe API de WhatsApp na
+Sharpify (o que existe é um livechat interno da loja deles); a mensagem pro
+cliente continua sendo o link `wa.me` manual de sempre (ver §6.1), só que
+agora carrega o código Pix real quando esse provider está ativo.
+
+### 10.1 Chave Pix simples (fallback, desde 2026-08-13)
+
+Usada quando a Sharpify não está configurada. A loja cadastra
+`Settings.pixKey` (CPF/CNPJ/e-mail/telefone/chave aleatória) e
+`Settings.pixCity` em `/admin/configuracoes`. Gera o BR Code (Pix "copia e
+cola") localmente com `generatePixBRCode()` [`src/lib/pix-brcode.ts`] —
+payload EMV padrão Banco Central, sem chamar API nenhuma.
+
+**Não existe confirmação automática nesse caminho** — é só um QR estático.
+Confirmação é manual: o admin confere no aplicativo do banco e clica
+**"Confirmar Pix recebido"** direto no card do pedido no Kanban (ver §9.1),
+que chama `POST /api/orders/[id]/confirm-payment` → `confirmPixPayment()`
+[`order-service.ts`] — só marca `paymentStatus="pago"`, não mexe no `status`
+do Kanban (o pedido já está visível normalmente, não fica escondido).
 
 ### 10.2 PagBank (legado, mantido por compatibilidade)
 
-Só é usado se `Settings.pixKey` estiver vazia. Configuração pelo painel
-(`/admin/configuracoes` → bloco PagBank) — client_id/secret/token ficam
-**criptografados** (AES-256-GCM, `src/lib/crypto.ts`, chave
-`FISCAL_ENCRYPTION_KEY`) na tabela `pagbank_config`. Nesse caminho o pedido
-Pix **não** passa por `aguardando_pagamento` — cria direto em "recebido"
-(igual às outras formas de pagamento) porque a confirmação chega sozinha pelo
-webhook:
+Só é usado se nem Sharpify nem a chave Pix simples estiverem configuradas.
+Configuração pelo painel (`/admin/configuracoes` → bloco PagBank) —
+client_id/secret/token ficam **criptografados** (AES-256-GCM,
+`src/lib/crypto.ts`, chave `FISCAL_ENCRYPTION_KEY`) na tabela
+`pagbank_config`. A confirmação chega sozinha pelo webhook:
 
 ```
 PagBank → POST /api/webhooks/pagbank (SEM autenticação de assinatura — ver §21)

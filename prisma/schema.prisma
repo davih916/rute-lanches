@@ -333,6 +333,9 @@ model Settings {
   // dona da loja, só pelo painel /admin/dev (senha própria, separada do login
   // dela).
   mensalidadePagaEm String?
+  // Liga/desliga o banner de cobrança de mensalidade sem depender do dia do
+  // mês — controlado só pelo painel /admin/dev (não visível pra loja).
+  mensalidadeReminderEnabled Boolean @default(true)
   deliveryFeeCents Int      @default(0)
   minOrderCents    Int      @default(0)
   receiptWidth     String   @default("80mm") // "58mm" | "80mm"
@@ -430,6 +433,23 @@ model PagBankConfig {
   @@map("pagbank_config")
 }
 
+// Configuração da integração Sharpify (singleton, id fixo "default") — gera
+// cobrança Pix real via gateway de pagamento deles, com confirmação
+// automática (ao contrário da chave Pix simples — ver Settings.pixKey), e
+// manda o link/código pro cliente via WhatsApp quando o admin aprova a
+// entrega. Configurado só pelo painel /admin/dev (não é visível pra loja —
+// "totalmente separado" dos pedidos normais e da mensalidade, a pedido do
+// desenvolvedor). Mesmo padrão de criptografia do PagBankConfig acima.
+model SharpifyConfig {
+  id                    String    @id @default("default")
+  clientId              String?
+  clientSecretEncrypted String?
+  testadoEm             DateTime?
+  updatedAt             DateTime  @updatedAt
+
+  @@map("sharpify_config")
+}
+
 // Cobrança PIX de um pedido (1:1). Criada sob demanda quando o cliente acessa
 // a tela de pagamento; atualizada pelo webhook do PagBank quando o pagamento
 // é confirmado.
@@ -437,7 +457,8 @@ model PixCharge {
   id             String    @id @default(cuid())
   orderId        String    @unique
   order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  externalId     String? // id da cobrança/pedido no PagBank
+  externalId     String? // id da cobrança no provider (PagBank ou Sharpify)
+  provider       String    @default("chave_simples") // "chave_simples" | "sharpify" | "pagbank" — define como consultar/confirmar o pagamento
   status         String    @default("aguardando_pagamento")
   // "aguardando_pagamento" | "pago" | "expirado" | "erro"
   qrCodeText     String? // código copia e cola

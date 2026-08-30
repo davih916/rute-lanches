@@ -5,6 +5,9 @@ import { prisma } from "@/lib/prisma";
 import { getOrderById } from "@/lib/services/order-service";
 import { getSettings } from "@/lib/services/settings-service";
 import { getPagBankConfig, getPagBankBaseUrl, getPagBankToken } from "@/lib/services/pagbank-config-service";
+import { isSharpifyConfigured } from "@/lib/services/sharpify-config-service";
+import { createSharpifyPixCharge, isSharpifyPaymentApproved, SharpifyServiceError } from "@/lib/services/sharpify-service";
+import { confirmPixPayment } from "@/lib/services/order-service";
 import { generatePixBRCode, type PixKeyType } from "@/lib/pix-brcode";
 import type { PixCharge } from "@prisma/client";
 
@@ -40,6 +43,16 @@ interface PagBankOrderResponse {
 export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> {
   const existing = await prisma.pixCharge.findUnique({ where: { orderId } });
   if (existing) {
+    // Cobrança gerada pela Sharpify: cada consulta do cliente (polling da
+    // tela /pedido/[id]) aproveita pra checar se já foi aprovada — dá
+    // confirmação praticamente automática, sem precisar de webhook/socket.
+    if (existing.status === "aguardando_pagamento" && existing.provider === "sharpify" && existing.externalId) {
+      const approved = await isSharpifyPaymentApproved(existing.externalId).catch(() => false);
+      if (approved) {
+        await confirmPixPayment(orderId);
+        return (await prisma.pixCharge.findUnique({ where: { orderId } })) ?? existing;
+      }
+    }
     return existing;
   }
 
@@ -76,7 +89,29 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
     throw err;
   }
 
-  // Caminho principal: chave Pix simples cadastrada em Configurações — gera o
+  // Caminho preferencial: Sharpify configurada em /admin/dev — cobrança Pix
+  // real via gateway deles, com confirmação praticamente automática (ver
+  // checagem de status acima). Configuração é exclusiva do desenvolvedor,
+  // "totalmente separada" da chave Pix simples que a loja mesma cadastra.
+  if (await isSharpifyConfigured()) {
+    try {
+      const { externalId, qrCodeText } = await createSharpifyPixCharge({
+        orderNumber: order.orderNumber,
+        amountCents: order.totalCents,
+      });
+      const qrCodeImageUrl = await QRCode.toDataURL(qrCodeText, { margin: 1, width: 320 }).catch(() => null);
+      return prisma.pixCharge.update({
+        where: { orderId },
+        data: { provider: "sharpify", externalId, qrCodeText, qrCodeImageUrl },
+      });
+    } catch (err) {
+      const message =
+        err instanceof SharpifyServiceError ? err.message : "Erro ao gerar cobrança Pix pela Sharpify.";
+      return prisma.pixCharge.update({ where: { orderId }, data: { status: "erro", errorMessage: message } });
+    }
+  }
+
+  // Caminho seguinte: chave Pix simples cadastrada em Configurações — gera o
   // BR Code na hora, sem depender de nenhuma API externa. Confirmação de
   // pagamento é manual (o admin confere no app do banco e clica "Confirmar
   // pagamento" no Kanban — ver confirmPixPayment em order-service.ts).

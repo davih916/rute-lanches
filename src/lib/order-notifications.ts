@@ -8,36 +8,40 @@ interface NotifiableOrder {
   customerName: string;
   customerPhone: string;
   storeName: string;
+  items: { productName: string; quantity: number }[];
+  totalCents: number;
 }
 
 interface ApprovedOrderInfo extends NotifiableOrder {
   orderId: string;
   paymentMethod: string;
-  items: { productName: string; quantity: number }[];
-  totalCents: number;
 }
 
-interface CancelledOrderInfo extends ApprovedOrderInfo {
-  paymentMethod: string;
+type CancelledOrderInfo = ApprovedOrderInfo;
+
+function formatItemsList(items: { productName: string; quantity: number }[]): string {
+  return items.map((i) => `${i.quantity}x ${i.productName}`).join(", ");
 }
 
 /**
  * Mensagem de avanço de status pro cliente, por status. `null` = esse status
  * não tem aviso automático (ex: "recebido" já é avisado pela própria
  * confirmação do pedido no site, "cancelado" tem sua própria mensagem — ver
- * `getDeliveryRejectionMessage`).
+ * `getDeliveryRejectionMessage`). Sempre traz o resumo do pedido (itens +
+ * total), não só um aviso genérico de status.
  */
 export function getStatusNotificationMessage(order: NotifiableOrder, status: OrderStatus): string | null {
   const num = formatOrderNumber(order.orderNumber);
+  const resumo = `Pedido ${num}: ${formatItemsList(order.items)} — Total: ${formatCentsToBRL(order.totalCents)}.`;
   switch (status) {
     case "preparando":
-      return `Olá, ${order.customerName}! Seu pedido ${num} da ${order.storeName} já está sendo preparado. Assim que tivermos uma atualização, avisaremos você.`;
+      return `Olá, ${order.customerName}! Seu pedido ${num} da ${order.storeName} já está sendo preparado. ${resumo} Assim que tivermos uma atualização, avisaremos você.`;
     case "saiu_entrega":
-      return `Olá, ${order.customerName}! Seu pedido ${num} já saiu para entrega. Em breve ele chegará até você.`;
+      return `Olá, ${order.customerName}! Seu pedido ${num} já saiu para entrega. ${resumo} Em breve ele chegará até você.`;
     case "pronto_retirada":
-      return `Olá, ${order.customerName}! Seu pedido ${num} já está pronto para retirada na ${order.storeName}.`;
+      return `Olá, ${order.customerName}! Seu pedido ${num} já está pronto para retirada na ${order.storeName}. ${resumo}`;
     case "entregue":
-      return `Olá, ${order.customerName}! Seu pedido ${num} foi entregue. Obrigado por pedir com a ${order.storeName}!`;
+      return `Olá, ${order.customerName}! Seu pedido ${num} foi entregue. ${resumo} Obrigado por pedir com a ${order.storeName}!`;
     default:
       return null;
   }

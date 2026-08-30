@@ -62,6 +62,8 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
     customerName: order.customer.name,
     customerPhone: order.customer.phone,
     storeName,
+    items: order.items.map((item) => ({ productName: item.productName, quantity: item.quantity })),
+    totalCents: order.totalCents,
   };
   const notificationMessage = getStatusNotificationMessage(notifiableOrder, status);
   const alreadyNotified = notifiedStatuses.includes(status);
@@ -159,10 +161,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
       }
       toast.success("Entrega recusada — pedido cancelado.");
       if (order.customer.phone) {
-        const message = getDeliveryRejectionMessage(
-          { orderNumber: order.orderNumber, customerName: order.customer.name, customerPhone: order.customer.phone, storeName },
-          reason
-        );
+        const message = getDeliveryRejectionMessage(notifiableOrder, reason);
         window.open(buildCustomerNotificationLink(order.customer.phone, message), "_blank", "noopener,noreferrer");
       }
       await refreshOrders();

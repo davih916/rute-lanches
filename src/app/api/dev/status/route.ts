@@ -1,15 +1,12 @@
 import { NextResponse } from "next/server";
 import { verifyDevPassword } from "@/lib/dev-auth";
-import { confirmMensalidadePaid } from "@/lib/services/settings-service";
+import { getSettings } from "@/lib/services/settings-service";
+import { isSharpifyConfigured } from "@/lib/services/sharpify-config-service";
 import { checkRequestRateLimit, getClientIp } from "@/lib/rate-limit";
 
-/**
- * Painel /admin/dev (uso exclusivo do desenvolvedor, não da loja): confirma
- * que a mensalidade do mês corrente foi paga, o que faz o banner de cobrança
- * sumir do dashboard admin até o próximo mês.
- */
+/** Painel /admin/dev: devolve o estado atual (mensalidade + Sharpify) depois de validar a senha. */
 export async function POST(request: Request) {
-  const rateLimit = checkRequestRateLimit(`${getClientIp(request)}:dev-confirm-payment`, 5, 60_000);
+  const rateLimit = checkRequestRateLimit(`${getClientIp(request)}:dev-status`, 10, 60_000);
   if (rateLimit.blocked) {
     return NextResponse.json({ error: "Muitas tentativas. Aguarde um instante." }, { status: 429 });
   }
@@ -21,6 +18,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
-  const settings = await confirmMensalidadePaid();
-  return NextResponse.json({ mensalidadePagaEm: settings.mensalidadePagaEm });
+  const [settings, sharpifyConfigured] = await Promise.all([getSettings(), isSharpifyConfigured()]);
+
+  return NextResponse.json({
+    mensalidadePagaEm: settings.mensalidadePagaEm,
+    mensalidadeReminderEnabled: settings.mensalidadeReminderEnabled,
+    sharpifyConfigured,
+  });
 }
