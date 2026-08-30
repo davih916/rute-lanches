@@ -2,9 +2,10 @@ import { NextResponse } from "next/server";
 import { verifyDevPassword } from "@/lib/dev-auth";
 import { getSettings } from "@/lib/services/settings-service";
 import { isSharpifyConfigured } from "@/lib/services/sharpify-config-service";
+import { isMensalidadePagamentoConfigured } from "@/lib/services/mensalidade-payment-config-service";
 import { checkRequestRateLimit, getClientIp } from "@/lib/rate-limit";
 
-/** Painel /admin/dev: devolve o estado atual (mensalidade + Sharpify) depois de validar a senha. */
+/** Painel /admin/dev: devolve o estado atual (mensalidade + Sharpify de pedidos + Sharpify da mensalidade) depois de validar a senha. */
 export async function POST(request: Request) {
   const rateLimit = checkRequestRateLimit(`${getClientIp(request)}:dev-status`, 10, 60_000);
   if (rateLimit.blocked) {
@@ -18,11 +19,17 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
-  const [settings, sharpifyConfigured] = await Promise.all([getSettings(), isSharpifyConfigured()]);
+  const [settings, sharpifyConfigured, mensalidadePagamentoConfigured] = await Promise.all([
+    getSettings(),
+    isSharpifyConfigured(),
+    isMensalidadePagamentoConfigured(),
+  ]);
 
   return NextResponse.json({
     mensalidadePagaEm: settings.mensalidadePagaEm,
     mensalidadeReminderEnabled: settings.mensalidadeReminderEnabled,
+    mensalidadeValorCents: settings.mensalidadeValorCents,
+    mensalidadePagamentoConfigured,
     sharpifyConfigured,
   });
 }

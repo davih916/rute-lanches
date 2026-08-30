@@ -45,6 +45,10 @@ export async function getSettingsSafe(): Promise<Settings> {
       pixCity: "SOROCABA",
       mensalidadePagaEm: null,
       mensalidadeReminderEnabled: true,
+      mensalidadeValorCents: 0,
+      mensalidadeChargeMonth: null,
+      mensalidadeChargeExternalId: null,
+      mensalidadeChargeQrCodeText: null,
       deliveryFeeCents: 0,
       minOrderCents: 0,
       receiptWidth: "80mm",
@@ -100,5 +104,19 @@ export async function setMensalidadeReminderEnabled(enabled: boolean): Promise<S
     where: { id: DEFAULT_SETTINGS_ID },
     update: { mensalidadeReminderEnabled: enabled },
     create: { id: DEFAULT_SETTINGS_ID, mensalidadeReminderEnabled: enabled },
+  });
+}
+
+/**
+ * Painel /admin/dev: define o valor da mensalidade — mudar o valor NÃO
+ * regenera a cobrança do mês corrente automaticamente (evita cobrar duas
+ * vezes um Pix já emitido); vale a partir do próximo mês, ou some com a
+ * cobrança do mês atual manualmente se precisar (ver mensalidade-pix-service.ts).
+ */
+export async function setMensalidadeValorCents(valorCents: number): Promise<Settings> {
+  return prisma.settings.upsert({
+    where: { id: DEFAULT_SETTINGS_ID },
+    update: { mensalidadeValorCents: valorCents },
+    create: { id: DEFAULT_SETTINGS_ID, mensalidadeValorCents: valorCents },
   });
 }

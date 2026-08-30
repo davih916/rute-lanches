@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { getOrderById } from "@/lib/services/order-service";
 import { getSettings } from "@/lib/services/settings-service";
 import { getPagBankConfig, getPagBankBaseUrl, getPagBankToken } from "@/lib/services/pagbank-config-service";
-import { isSharpifyConfigured } from "@/lib/services/sharpify-config-service";
+import { getSharpifyConfig, getSharpifyCredentials, isSharpifyConfigured } from "@/lib/services/sharpify-config-service";
 import { createSharpifyPixCharge, isSharpifyPaymentApproved, SharpifyServiceError } from "@/lib/services/sharpify-service";
 import { confirmPixPayment } from "@/lib/services/order-service";
 import { generatePixBRCode, type PixKeyType } from "@/lib/pix-brcode";
@@ -47,7 +47,9 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
     // tela /pedido/[id]) aproveita pra checar se já foi aprovada — dá
     // confirmação praticamente automática, sem precisar de webhook/socket.
     if (existing.status === "aguardando_pagamento" && existing.provider === "sharpify" && existing.externalId) {
-      const approved = await isSharpifyPaymentApproved(existing.externalId).catch(() => false);
+      const approved = await getSharpifyConfig()
+        .then((config) => isSharpifyPaymentApproved(getSharpifyCredentials(config), existing.externalId!))
+        .catch(() => false);
       if (approved) {
         await confirmPixPayment(orderId);
         return (await prisma.pixCharge.findUnique({ where: { orderId } })) ?? existing;
@@ -95,8 +97,10 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
   // "totalmente separada" da chave Pix simples que a loja mesma cadastra.
   if (await isSharpifyConfigured()) {
     try {
-      const { externalId, qrCodeText } = await createSharpifyPixCharge({
-        orderNumber: order.orderNumber,
+      const sharpifyConfig = await getSharpifyConfig();
+      const { externalId, qrCodeText } = await createSharpifyPixCharge(getSharpifyCredentials(sharpifyConfig), {
+        name: `Pedido #${String(order.orderNumber).padStart(3, "0")}`,
+        description: "Pagamento do pedido",
         amountCents: order.totalCents,
       });
       const qrCodeImageUrl = await QRCode.toDataURL(qrCodeText, { margin: 1, width: 320 }).catch(() => null);

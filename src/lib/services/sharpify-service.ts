@@ -1,16 +1,20 @@
 import "server-only";
-import { getSharpifyConfig, getSharpifyCredentials, SharpifyConfigError } from "@/lib/services/sharpify-config-service";
 
 const SHARPIFY_BASE_URL = "https://api.sharpify.com.br";
 
 export class SharpifyServiceError extends Error {
   constructor(
     message: string,
-    public readonly code: "NOT_CONFIGURED" | "REQUEST_FAILED"
+    public readonly code: "REQUEST_FAILED"
   ) {
     super(message);
     this.name = "SharpifyServiceError";
   }
+}
+
+export interface SharpifyCredentials {
+  clientId: string;
+  clientSecret: string;
 }
 
 interface SharpifyPaymentLinkResponse {
@@ -30,17 +34,7 @@ interface SharpifyPaymentLinkResponse {
   };
 }
 
-async function getHeaders(): Promise<Record<string, string>> {
-  const config = await getSharpifyConfig();
-  let credentials: { clientId: string; clientSecret: string };
-  try {
-    credentials = getSharpifyCredentials(config);
-  } catch (err) {
-    if (err instanceof SharpifyConfigError) {
-      throw new SharpifyServiceError("Sharpify não configurada. Cadastre em /admin/dev.", "NOT_CONFIGURED");
-    }
-    throw err;
-  }
+function getHeaders(credentials: SharpifyCredentials): Record<string, string> {
   return {
     "Content-Type": "application/json",
     "x-sharpify-client-id": credentials.clientId,
@@ -48,19 +42,23 @@ async function getHeaders(): Promise<Record<string, string>> {
   };
 }
 
-/** Cria uma cobrança Pix real via gateway da Sharpify — devolve o código copia-e-cola e o id pra consultar o status depois. */
-export async function createSharpifyPixCharge(input: {
-  orderNumber: number;
-  amountCents: number;
-}): Promise<{ externalId: string; qrCodeText: string }> {
-  const headers = await getHeaders();
-
+/**
+ * Cria uma cobrança Pix real via gateway da Sharpify — devolve o código
+ * copia-e-cola e o id pra consultar o status depois. Recebe as credenciais
+ * explicitamente porque essa função é usada tanto pra Pix dos pedidos
+ * (SharpifyConfig) quanto pra Pix da mensalidade (MensalidadePagamentoConfig)
+ * — duas contas/credenciais completamente independentes.
+ */
+export async function createSharpifyPixCharge(
+  credentials: SharpifyCredentials,
+  input: { name: string; description: string; amountCents: number }
+): Promise<{ externalId: string; qrCodeText: string }> {
   const response = await fetch(`${SHARPIFY_BASE_URL}/api/v1/checkout/payment-link/create`, {
     method: "POST",
-    headers,
+    headers: getHeaders(credentials),
     body: JSON.stringify({
-      name: `Pedido #${String(input.orderNumber).padStart(3, "0")}`,
-      description: "Pagamento do pedido",
+      name: input.name,
+      description: input.description,
       amount: input.amountCents / 100,
       gatewayMethod: "PIX",
     }),
@@ -82,11 +80,13 @@ export async function createSharpifyPixCharge(input: {
 }
 
 /** Consulta se um link de pagamento já foi aprovado. */
-export async function isSharpifyPaymentApproved(paymentLinkId: string): Promise<boolean> {
-  const headers = await getHeaders();
+export async function isSharpifyPaymentApproved(
+  credentials: SharpifyCredentials,
+  paymentLinkId: string
+): Promise<boolean> {
   const response = await fetch(
     `${SHARPIFY_BASE_URL}/api/v1/checkout/payment-link/get?paymentLinkId=${encodeURIComponent(paymentLinkId)}`,
-    { headers }
+    { headers: getHeaders(credentials) }
   );
   if (!response.ok) return false;
   const data = (await response.json().catch(() => null)) as SharpifyPaymentLinkResponse | null;

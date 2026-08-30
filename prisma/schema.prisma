@@ -336,6 +336,14 @@ model Settings {
   // Liga/desliga o banner de cobrança de mensalidade sem depender do dia do
   // mês — controlado só pelo painel /admin/dev (não visível pra loja).
   mensalidadeReminderEnabled Boolean @default(true)
+  // Valor da mensalidade e cobrança Pix atual (via MensalidadePagamentoConfig
+  // — credenciais próprias do desenvolvedor, "totalmente separadas" da
+  // Sharpify usada nos pedidos). Snapshot de UM mês por vez: quando o mês
+  // muda, uma nova cobrança é gerada por cima (ver mensalidade-pix-service.ts).
+  mensalidadeValorCents        Int     @default(0)
+  mensalidadeChargeMonth       String? // "YYYY-MM" a que a cobrança abaixo pertence
+  mensalidadeChargeExternalId  String?
+  mensalidadeChargeQrCodeText  String?
   deliveryFeeCents Int      @default(0)
   minOrderCents    Int      @default(0)
   receiptWidth     String   @default("80mm") // "58mm" | "80mm"
@@ -448,6 +456,20 @@ model SharpifyConfig {
   updatedAt             DateTime  @updatedAt
 
   @@map("sharpify_config")
+}
+
+// Credenciais Sharpify usadas SÓ pra cobrar a mensalidade do sistema da
+// própria loja — conta/credencial do desenvolvedor, sem nenhuma relação com
+// a SharpifyConfig acima (que é da loja, pros pedidos dela). "Totalmente
+// separado", a pedido explícito do desenvolvedor. Configurado só em
+// /admin/dev.
+model MensalidadePagamentoConfig {
+  id                    String    @id @default("default")
+  clientId              String?
+  clientSecretEncrypted String?
+  updatedAt             DateTime  @updatedAt
+
+  @@map("mensalidade_pagamento_config")
 }
 
 // Cobrança PIX de um pedido (1:1). Criada sob demanda quando o cliente acessa
