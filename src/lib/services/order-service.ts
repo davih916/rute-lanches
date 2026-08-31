@@ -179,7 +179,10 @@ export async function createOrder(input: CreateOrderInput): Promise<OrderWithRel
         // mostrarem o endereço de QUANDO o pedido foi feito.
         address: input.deliveryType === "entrega" ? input.customer.address || null : null,
         addressNumber: input.deliveryType === "entrega" ? input.customer.addressNumber || null : null,
-        neighborhood: input.deliveryType === "entrega" ? deliveryZoneMatch?.neighborhood ?? null : null,
+        neighborhood:
+          input.deliveryType === "entrega"
+            ? (deliveryZoneMatch?.neighborhood ?? input.customer.neighborhood ?? null)
+            : null,
         complement: input.deliveryType === "entrega" ? input.customer.complement || null : null,
         reference: input.deliveryType === "entrega" ? input.customer.reference || null : null,
         cep: input.deliveryType === "entrega" ? input.customer.cep || null : null,

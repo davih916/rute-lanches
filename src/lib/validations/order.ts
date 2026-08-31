@@ -21,9 +21,10 @@ export const createOrderSchema = z
         .regex(/^[0-9()+\-.\s]+$/, "Telefone inválido"),
       address: z.string().trim().max(200).optional(),
       addressNumber: z.string().trim().max(20).optional(),
-      // Não é mais digitado livremente — vem da DeliveryZone encontrada pelo
-      // CEP (ver createOrder em order-service.ts). Mantido opcional aqui só
-      // por segurança de tipo; o valor enviado pelo cliente é ignorado.
+      // Digitado livremente (obrigatório pra entrega — ver superRefine
+      // abaixo). Se o CEP bater com uma zona cadastrada, o valor da zona
+      // prevalece; senão, esse texto é o que a loja vê pra decidir se aceita
+      // a entrega (ver createOrder em order-service.ts).
       neighborhood: z.string().trim().max(100).optional(),
       cep: z
         .string()
@@ -55,6 +56,13 @@ export const createOrderSchema = z
         code: z.ZodIssueCode.custom,
         path: ["customer", "address"],
         message: "Informe o endereço para entrega",
+      });
+    }
+    if (data.deliveryType === "entrega" && (!data.customer.neighborhood || data.customer.neighborhood.trim().length < 2)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["customer", "neighborhood"],
+        message: "Informe o bairro para entrega",
       });
     }
     // CEP é opcional (não bloqueia o pedido) — ver createOrder em

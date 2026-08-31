@@ -78,6 +78,7 @@ export function CheckoutForm({
   const [addressNumber, setAddressNumber] = useState("");
   const [cep, setCep] = useState("");
   const [cepLookup, setCepLookup] = useState<CepLookupState>({ status: "idle" });
+  const [neighborhood, setNeighborhood] = useState("");
   const [complement, setComplement] = useState("");
   const [reference, setReference] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(
@@ -135,6 +136,9 @@ export function CheckoutForm({
         if (cancelled) return;
         if (res.ok) {
           setCepLookup({ status: "found", neighborhood: data.neighborhood, feeCents: data.feeCents });
+          // Preenche o bairro sozinho quando acha a zona — cliente ainda pode
+          // editar, o campo continua sendo o que vale de verdade.
+          setNeighborhood((prev) => prev || data.neighborhood);
         } else {
           setCepLookup({ status: "not_found" });
         }
@@ -152,9 +156,10 @@ export function CheckoutForm({
 
   const subtotal = getCartSubtotalCents(items);
   // Busca por CEP é só um bônus (preenche a taxa automático quando a loja já
-  // cadastrou a zona) — NUNCA bloqueia o pedido, mesmo sem achar nada, pra
-  // não travar todo pedido de entrega enquanto a lista de zonas ainda não
-  // está completa (ver createOrder em order-service.ts).
+  // cadastrou a zona) — NUNCA bloqueia o pedido sozinha. A segurança contra
+  // aceitar endereço fora da área (importante com Pix automático) vem do
+  // campo de Bairro (texto livre, obrigatório) — a loja recusa a entrega ao
+  // aprovar se o bairro digitado não fizer sentido pra ela.
   const deliveryFeeKnown = cepLookup.status === "found";
   const deliveryFeeCents = deliveryFeeKnown ? cepLookup.feeCents : 0;
   const total = subtotal + deliveryFeeCents;
@@ -191,6 +196,7 @@ export function CheckoutForm({
             address: isDelivery ? address : undefined,
             addressNumber: isDelivery ? addressNumber || undefined : undefined,
             cep: isDelivery ? sanitizeCep(cep) : undefined,
+            neighborhood: isDelivery ? neighborhood : undefined,
             complement: isDelivery ? complement || undefined : undefined,
             reference: isDelivery ? reference || undefined : undefined,
           },
@@ -371,6 +377,13 @@ export function CheckoutForm({
               label="Número"
               value={addressNumber}
               onChange={(e) => setAddressNumber(e.target.value)}
+            />
+            <Input
+              name="neighborhood"
+              label="Bairro"
+              required
+              value={neighborhood}
+              onChange={(e) => setNeighborhood(e.target.value)}
             />
             <Input
               name="complement"
