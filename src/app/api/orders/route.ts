@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { createOrderSchema } from "@/lib/validations/order";
 import { createOrder, listOrders, listPendingPixPayments, OrderServiceError } from "@/lib/services/order-service";
+import { syncPendingSharpifyPixCharges } from "@/lib/services/pagbank-service";
 import { checkRequestRateLimit, getClientIp } from "@/lib/rate-limit";
 
 /** Público: o cliente do site cria um pedido. */
@@ -43,6 +44,11 @@ export async function GET() {
   if (!session) {
     return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
   }
+
+  // Confirma sozinho qualquer Pix Sharpify que tenha caído — o Kanban fica
+  // aberto o dia todo com a loja, é uma forma mais confiável de detectar
+  // pagamento do que depender só da tela do cliente ainda estar aberta.
+  await syncPendingSharpifyPixCharges();
 
   const [orders, pendingPixPayments] = await Promise.all([listOrders(), listPendingPixPayments()]);
   return NextResponse.json({ orders, pendingPixPayments });

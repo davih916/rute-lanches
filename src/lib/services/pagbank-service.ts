@@ -39,21 +39,54 @@ interface PagBankOrderResponse {
   charges?: Array<{ id?: string; status?: string }>;
 }
 
+/**
+ * Confere na Sharpify se uma cobrança específica já foi paga e confirma
+ * sozinho se sim. Chamada em dois lugares — ver comentários nos chamadores —
+ * porque nenhum dos dois sozinho é confiável: o cliente pode fechar a aba
+ * assim que paga (parando o polling da tela dele), então o Kanban (que fica
+ * aberto o dia todo com a loja) também varre as cobranças pendentes.
+ */
+async function checkAndConfirmSharpifyCharge(charge: PixCharge): Promise<boolean> {
+  if (charge.status !== "aguardando_pagamento" || charge.provider !== "sharpify" || !charge.externalId) {
+    return false;
+  }
+  const approved = await getSharpifyConfig()
+    .then((config) => isSharpifyPaymentApproved(getSharpifyCredentials(config), charge.externalId!))
+    .catch((err) => {
+      console.error(`Erro ao consultar status Sharpify do pedido ${charge.orderId}:`, err);
+      return false;
+    });
+  if (approved) {
+    await confirmPixPayment(charge.orderId);
+  }
+  return approved;
+}
+
+/**
+ * Varre todas as cobranças Sharpify ainda pendentes e confirma as que já
+ * foram pagas — chamada a cada consulta do Kanban (GET /api/orders, a cada
+ * 5s enquanto o admin está com a tela aberta). Complementa (não substitui) a
+ * checagem em getOrCreatePixCharge, que só roda enquanto a tela do CLIENTE
+ * está aberta.
+ */
+export async function syncPendingSharpifyPixCharges(): Promise<void> {
+  if (!(await isSharpifyConfigured())) return;
+
+  const pending = await prisma.pixCharge.findMany({
+    where: { status: "aguardando_pagamento", provider: "sharpify", externalId: { not: null } },
+  });
+  await Promise.all(pending.map((charge) => checkAndConfirmSharpifyCharge(charge)));
+}
+
 /** Cria (ou retorna) a cobrança Pix de um pedido. Nunca lança por falha do PagBank — grava o erro no registro. */
 export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> {
   const existing = await prisma.pixCharge.findUnique({ where: { orderId } });
   if (existing) {
-    // Cobrança gerada pela Sharpify: cada consulta do cliente (polling da
-    // tela /pedido/[id]) aproveita pra checar se já foi aprovada — dá
-    // confirmação praticamente automática, sem precisar de webhook/socket.
-    if (existing.status === "aguardando_pagamento" && existing.provider === "sharpify" && existing.externalId) {
-      const approved = await getSharpifyConfig()
-        .then((config) => isSharpifyPaymentApproved(getSharpifyCredentials(config), existing.externalId!))
-        .catch(() => false);
-      if (approved) {
-        await confirmPixPayment(orderId);
-        return (await prisma.pixCharge.findUnique({ where: { orderId } })) ?? existing;
-      }
+    // Ver checkAndConfirmSharpifyCharge — aproveita a consulta do cliente
+    // (polling da tela /pedido/[id]) pra já checar se foi aprovada.
+    const approved = await checkAndConfirmSharpifyCharge(existing);
+    if (approved) {
+      return (await prisma.pixCharge.findUnique({ where: { orderId } })) ?? existing;
     }
     return existing;
   }

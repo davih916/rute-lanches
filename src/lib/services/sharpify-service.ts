@@ -56,6 +56,7 @@ export async function createSharpifyPixCharge(
   const response = await fetch(`${SHARPIFY_BASE_URL}/api/v1/checkout/payment-link/create`, {
     method: "POST",
     headers: getHeaders(credentials),
+    cache: "no-store",
     body: JSON.stringify({
       name: input.name,
       description: input.description,
@@ -86,9 +87,16 @@ export async function isSharpifyPaymentApproved(
 ): Promise<boolean> {
   const response = await fetch(
     `${SHARPIFY_BASE_URL}/api/v1/checkout/payment-link/get?paymentLinkId=${encodeURIComponent(paymentLinkId)}`,
-    { headers: getHeaders(credentials) }
+    { headers: getHeaders(credentials), cache: "no-store" }
   );
-  if (!response.ok) return false;
+  if (!response.ok) {
+    console.error(`Sharpify recusou consulta de status (HTTP ${response.status}) pra ${paymentLinkId}.`);
+    return false;
+  }
   const data = (await response.json().catch(() => null)) as SharpifyPaymentLinkResponse | null;
-  return data?.data?.status === "APPROVED";
+  if (!data) {
+    console.error(`Resposta inesperada da Sharpify ao consultar ${paymentLinkId}: corpo não é JSON válido.`);
+    return false;
+  }
+  return data.data?.status === "APPROVED";
 }
