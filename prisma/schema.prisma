@@ -233,6 +233,13 @@ model Order {
   // approveDelivery), podendo ajustar o valor numa exceção pontual dentro da
   // área (rua que não atende, etc), mas o ponto de partida já vem certo.
   deliveryFeeCents Int       @default(0)
+  // true só quando a taxa foi confirmada de propósito (aprovação com valor >
+  // 0, ou o botão dedicado "Definir taxa e enviar Pix" — mesmo que o valor
+  // seja 0, ali é sempre intencional). Enquanto for false, o Pix NÃO é
+  // liberado pro cliente (ver getOrCreatePixCharge em pagbank-service.ts) —
+  // evita cobrar um valor errado quando o admin aprova a entrega sem
+  // perceber que deixou a taxa em R$0,00.
+  deliveryFeeConfirmed Boolean @default(false)
   totalCents       Int
   // Preenchido só quando a entrega é recusada pelo admin (rejectDelivery).
   rejectionReason  String?

@@ -341,6 +341,12 @@ export async function approveDelivery(
       status: "preparando",
       deliveryFeeCents: feeCents,
       totalCents: existing.itemsTotalCents + feeCents,
+      // Só marca como confirmada se o admin digitou um valor > 0 — deixar em
+      // R$0,00 nessa etapa quase sempre é distração (o prompt já vem
+      // pré-preenchido com 0 quando não achou zona pelo CEP), não uma
+      // escolha real de "entrega grátis". Ver botão dedicado abaixo
+      // (setDeliveryFee) pra confirmar de propósito, inclusive com valor 0.
+      deliveryFeeConfirmed: feeCents > 0,
     },
   });
   if (updated.count === 0) {
@@ -351,6 +357,44 @@ export async function approveDelivery(
   }
   await prisma.orderStatusHistory.create({
     data: { orderId, status: "preparando", changedById: adminId },
+  });
+  return (await getOrderById(orderId))!;
+}
+
+/**
+ * Botão dedicado "Definir taxa e enviar Pix" — corrige um pedido de entrega
+ * que ficou com `deliveryFeeConfirmed=false` (aprovado com R$0,00 sem
+ * querer, ou pedido antigo de antes dessa trava existir). Diferente de
+ * `approveDelivery`, funciona em QUALQUER status (não só "recebido", já que
+ * o pedido pode já estar em preparo) e SEMPRE marca como confirmada, mesmo
+ * que o valor digitado seja 0 — aqui a ação é sempre intencional.
+ */
+export async function setDeliveryFee(
+  orderId: string,
+  feeCents: number,
+  _adminId: string
+): Promise<OrderWithRelations> {
+  const existing = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!existing) {
+    throw new OrderServiceError("Pedido não encontrado.", "ORDER_NOT_FOUND");
+  }
+  if (existing.deliveryType !== "entrega") {
+    throw new OrderServiceError("Este pedido não é de entrega.", "NOT_PENDING_APPROVAL");
+  }
+  if (existing.status === "cancelado") {
+    throw new OrderServiceError("Este pedido está cancelado.", "INVALID_STATUS_TRANSITION");
+  }
+
+  // Não grava OrderStatusHistory aqui — só ajusta a taxa, o status do
+  // Kanban não muda (evitaria um registro de auditoria enganoso, como se o
+  // pedido tivesse "mudado de status" pro mesmo status que já estava).
+  await prisma.order.update({
+    where: { id: orderId },
+    data: {
+      deliveryFeeCents: feeCents,
+      totalCents: existing.itemsTotalCents + feeCents,
+      deliveryFeeConfirmed: true,
+    },
   });
   return (await getOrderById(orderId))!;
 }

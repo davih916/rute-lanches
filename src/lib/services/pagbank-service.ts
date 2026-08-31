@@ -98,11 +98,12 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
   if (order.paymentMethod !== "pix") {
     throw new PagBankServiceError("Este pedido não usa pagamento Pix.", "NOT_PIX");
   }
-  // Entrega ainda não aprovada: o total não inclui a taxa (só definida na
-  // aprovação — ver approveDelivery), então gerar o Pix agora cobraria um
-  // valor errado (a menos, sem a taxa). Só libera o pagamento depois que a
-  // loja confirmar o endereço e definir a taxa de entrega.
-  if (order.deliveryType === "entrega" && order.status === "recebido") {
+  // Entrega ainda não aprovada, ou taxa nunca foi confirmada de propósito
+  // (deliveryFeeConfirmed false — inclui o caso de a taxa ter ficado em
+  // R$0,00 por engano): gerar o Pix agora arriscaria cobrar um valor errado.
+  // Só libera o pagamento depois que a loja confirmar o endereço e definir
+  // a taxa de entrega (ver approveDelivery / setDeliveryFee).
+  if (order.deliveryType === "entrega" && (order.status === "recebido" || !order.deliveryFeeConfirmed)) {
     throw new PagBankServiceError(
       "A loja ainda está confirmando o endereço e a taxa de entrega.",
       "DELIVERY_PENDING"

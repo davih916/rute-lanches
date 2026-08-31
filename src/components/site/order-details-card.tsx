@@ -62,7 +62,7 @@ export function OrderDetailsCard({ initialOrder, storeWhatsapp, storeName }: Ord
   const status = order.status as OrderStatus;
   const statusColor = ORDER_STATUS_COLORS[status];
   const isDelivery = order.deliveryType === "entrega";
-  const deliveryPending = isDelivery && status === "recebido";
+  const deliveryPending = isDelivery && (status === "recebido" || !order.deliveryFeeConfirmed);
 
   return (
     <>

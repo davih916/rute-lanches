@@ -20,6 +20,7 @@ import {
 import {
   getStatusNotificationMessage,
   getDeliveryApprovedMessage,
+  getDeliveryFeeUpdatedMessage,
   getDeliveryRejectionMessage,
   getOrderCancelledMessage,
   buildCustomerNotificationLink,
@@ -48,6 +49,7 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
   const [approving, setApproving] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [confirmingPix, setConfirmingPix] = useState(false);
+  const [settingFee, setSettingFee] = useState(false);
 
   const status = order.status as OrderStatus;
   const deliveryType = order.deliveryType as DeliveryType;
@@ -56,6 +58,14 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
   const isCash = (order.paymentMethod as PaymentMethod) === "dinheiro";
   const isPix = (order.paymentMethod as PaymentMethod) === "pix";
   const awaitingDeliveryApproval = status === "recebido" && deliveryType === "entrega";
+  // Pedido de entrega já aprovado mas a taxa nunca foi confirmada de
+  // propósito (ex: aprovado com R$0,00 por engano) — o Pix fica travado
+  // (ver getOrCreatePixCharge) até o admin corrigir aqui.
+  const needsFeeConfirmation =
+    deliveryType === "entrega" &&
+    status !== "cancelado" &&
+    !awaitingDeliveryApproval &&
+    !order.deliveryFeeConfirmed;
   const notifiedStatuses = parseNotifiedStatuses(order.notifiedStatuses);
   const notifiableOrder = {
     orderNumber: order.orderNumber,
@@ -115,6 +125,51 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
       toast.error("Falha de conexão.");
     } finally {
       setApproving(false);
+    }
+  }
+
+  async function handleSetDeliveryFee(e: React.MouseEvent) {
+    e.stopPropagation();
+    const input = window.prompt(
+      "Qual a taxa de entrega deste pedido? (0 = entrega grátis)",
+      (order.deliveryFeeCents / 100).toFixed(2).replace(".", ",")
+    );
+    if (input === null) return;
+    const feeCents = reaisToCents(input);
+    setSettingFee(true);
+    try {
+      const res = await fetch(`/api/orders/${order.id}/set-delivery-fee`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feeCents }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Não foi possível definir a taxa de entrega.");
+        return;
+      }
+      toast.success("Taxa de entrega definida.");
+      if (order.customer.phone) {
+        const message = getDeliveryFeeUpdatedMessage(
+          {
+            orderId: order.id,
+            orderNumber: order.orderNumber,
+            customerName: order.customer.name,
+            customerPhone: order.customer.phone,
+            storeName,
+            paymentMethod: order.paymentMethod,
+            items: order.items.map((item) => ({ productName: item.productName, quantity: item.quantity })),
+            totalCents: order.itemsTotalCents + feeCents,
+          },
+          window.location.origin
+        );
+        window.open(buildCustomerNotificationLink(order.customer.phone, message), "_blank", "noopener,noreferrer");
+      }
+      await refreshOrders();
+    } catch {
+      toast.error("Falha de conexão.");
+    } finally {
+      setSettingFee(false);
     }
   }
 
@@ -312,6 +367,28 @@ export function OrderCard({ order, onChangeStatus, onAcknowledge, isUpdating, is
           <Check className="size-4" />
           Confirmar Pix recebido
         </Button>
+      )}
+
+      {needsFeeConfirmation && (
+        <div className="flex flex-col gap-2 rounded-xl border-2 border-amber-300 bg-amber-50 p-3">
+          <p className="flex items-center gap-1.5 text-sm font-extrabold uppercase text-amber-800">
+            <AlertTriangle className="size-4" />
+            Taxa de entrega não definida
+          </p>
+          {isPix && (
+            <p className="text-xs font-medium text-amber-700">
+              O Pix não é liberado pro cliente até a taxa ser confirmada.
+            </p>
+          )}
+          <Button
+            size="lg"
+            loading={settingFee}
+            onClick={handleSetDeliveryFee}
+            className="w-full !bg-amber-600 text-base hover:!bg-amber-700"
+          >
+            Definir taxa{isPix && order.customer.phone ? " e enviar Pix" : ""}
+          </Button>
+        </div>
       )}
 
       {awaitingDeliveryApproval ? (

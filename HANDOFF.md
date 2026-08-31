@@ -464,6 +464,22 @@ Admin vê endereço/bairro/referência no próprio card e decide:
       automaticamente um link wa.me pro CLIENTE com a mensagem de recusa (ver abaixo).
 ```
 
+**Trava de taxa não confirmada** (`Order.deliveryFeeConfirmed`, default `false`): existe pra
+não liberar o Pix quando a entrega foi aprovada com a taxa em R$0,00 por engano (aconteceu
+em produção). `approveDelivery()` só marca `deliveryFeeConfirmed=true` se `feeCents > 0` —
+deixar em 0 nessa etapa é tratado como distração, não como escolha real de entrega grátis.
+`getOrCreatePixCharge()` (pagbank-service.ts) bloqueia com `DELIVERY_PENDING` enquanto
+`deliveryFeeConfirmed=false`, e `order-details-card.tsx` (tela do cliente) trata isso como
+"entrega ainda pendente" (some o painel de Pix, mostra "A combinar"). Se um pedido de
+entrega+Pix ficar nesse estado depois da aprovação inicial (ex: taxa 0 por engano), o card
+no Kanban mostra "⚠️ Taxa de entrega não definida" com um botão **"Definir taxa e enviar
+Pix"** (`handleSetDeliveryFee` em order-card.tsx → `POST /api/orders/[id]/set-delivery-fee`
+→ `setDeliveryFee()` em order-service.ts). Diferente de `approveDelivery`, essa função
+funciona em qualquer status não-cancelado e SEMPRE marca `deliveryFeeConfirmed=true`
+(mesmo com valor 0 — aqui a ação já é sempre intencional); não grava
+`OrderStatusHistory` (não muda o status do Kanban, só corrige a taxa). Depois de salvar,
+abre um `wa.me` pro cliente com o link de pagamento (`getDeliveryFeeUpdatedMessage`).
+
 **Avisos de status pro cliente** (`src/lib/order-notifications.ts`): diferente do
 "Combinar pelo WhatsApp" (que manda o pedido pra LOJA), isso manda uma mensagem de
 status pro **cliente**, usando o telefone dele (`order.customer.phone`). Continua sendo

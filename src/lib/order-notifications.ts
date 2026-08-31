@@ -64,6 +64,22 @@ export function getDeliveryApprovedMessage(order: ApprovedOrderInfo, appUrl: str
   return `Olá, ${order.customerName}! Seu pedido ${num} (${itemsList}) na ${order.storeName} foi confirmado e já entrou em preparo. Total: ${formatCentsToBRL(order.totalCents)}. O prazo estimado é de cerca de 30 minutos. Agradecemos muito a sua preferência!${pixNote}`;
 }
 
+/**
+ * Mensagem quando o admin define/corrige a taxa de entrega DEPOIS da
+ * aprovação inicial (ex: pedido saiu com taxa R$0,00 por engano — ver
+ * setDeliveryFee em order-service.ts e o gate em getOrCreatePixCharge).
+ * Só é usada nesse caso pontual, diferente de getDeliveryApprovedMessage
+ * (que já cobre o fluxo normal de aprovação).
+ */
+export function getDeliveryFeeUpdatedMessage(order: ApprovedOrderInfo, appUrl: string): string {
+  const num = formatOrderNumber(order.orderNumber);
+  const pixNote =
+    order.paymentMethod === "pix"
+      ? ` Agora você já pode pagar pelo Pix, acesse: ${appUrl}/pedido/${order.orderId}`
+      : "";
+  return `Olá, ${order.customerName}! A taxa de entrega do seu pedido ${num} na ${order.storeName} foi atualizada. Novo total: ${formatCentsToBRL(order.totalCents)}.${pixNote}`;
+}
+
 /** Mensagem quando o admin recusa a entrega (endereço fora de área, etc). */
 export function getDeliveryRejectionMessage(order: NotifiableOrder, reason?: string | null): string {
   const num = formatOrderNumber(order.orderNumber);
