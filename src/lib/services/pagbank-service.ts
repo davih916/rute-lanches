@@ -11,6 +11,13 @@ import { confirmPixPayment } from "@/lib/services/order-service";
 import { generatePixBRCode, type PixKeyType } from "@/lib/pix-brcode";
 import type { PixCharge } from "@prisma/client";
 
+// Cliente reclamou do fluxo de Pix automático via Sharpify e pediu pra
+// voltar a usar a chave Pix simples dela mesma na cobrança dos pedidos —
+// ver uso abaixo em getOrCreatePixCharge. Não mexe na mensalidade (config
+// Sharpify separada, do revendedor) nem apaga a config salva em
+// /admin/dev, só desliga esse caminho até decidirem reativar.
+const SHARPIFY_ORDER_PIX_ENABLED = false;
+
 export class PagBankServiceError extends Error {
   constructor(
     message: string,
@@ -125,11 +132,7 @@ export async function getOrCreatePixCharge(orderId: string): Promise<PixCharge> 
     throw err;
   }
 
-  // Caminho preferencial: Sharpify configurada em /admin/dev — cobrança Pix
-  // real via gateway deles, com confirmação praticamente automática (ver
-  // checagem de status acima). Configuração é exclusiva do desenvolvedor,
-  // "totalmente separada" da chave Pix simples que a loja mesma cadastra.
-  if (await isSharpifyConfigured()) {
+  if (SHARPIFY_ORDER_PIX_ENABLED && (await isSharpifyConfigured())) {
     try {
       const sharpifyConfig = await getSharpifyConfig();
       const { externalId, qrCodeText } = await createSharpifyPixCharge(getSharpifyCredentials(sharpifyConfig), {
